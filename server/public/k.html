@@ -49,7 +49,7 @@ var cur = null;
 var opened = false;
 
 function show(token, redirect, state) {
-  if (state === "done") {
+  if (state === "done" || state === "signed") {
     card.className = "card done";
     t.textContent = "Klart";
     s.textContent = "Ga tillbaka till samtalet.";
@@ -70,8 +70,8 @@ function show(token, redirect, state) {
 b.addEventListener("click", function () {
   if (!cur) { return; }
   opened = true;
-  var u = "bankid:///?autostarttoken=" + cur.token;
-  if (cur.redirect) { u += "&redirect=" + encodeURIComponent(cur.redirect); }
+  var back = location.protocol + "//" + location.host + "/api/signed?code=" + encodeURIComponent(code);
+  var u = "bankid:///?autostarttoken=" + cur.token + "&redirect=" + encodeURIComponent(back);
   location.href = u;
   t.textContent = "BankID oppnas";
   s.textContent = "Signera i BankID-appen.";

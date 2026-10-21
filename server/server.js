@@ -57,6 +57,16 @@ app.post("/api/done", function (req, res) {
     res.json({ ok: true });
 });
 
+app.get("/api/signed", function (req, res) {
+    const code = req.query.code || "default";
+    const s = get(code);
+    s.state = "signed";
+    s.ts = Date.now();
+    broadcast(code, { type: "signed", state: "signed" });
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>Klart</h2><p>Ga tillbaka till samtalet.</p></body></html>');
+});
+
 app.get("/api/session/:code/state", function (req, res) {
     const s = get(req.params.code);
     res.json({ code: s.code, state: s.state, token: s.token, redirect: s.redirect, ts: s.ts });

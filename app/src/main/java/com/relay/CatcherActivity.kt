@@ -2,6 +2,8 @@ package com.relay
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import org.json.JSONObject
 import java.io.OutputStreamWriter
@@ -18,6 +20,7 @@ class CatcherActivity : Activity() {
                 val token = u.getQueryParameter("autostarttoken")
                 if (token != null && token.isNotEmpty()) {
                     val p = getSharedPreferences("relay", Context.MODE_PRIVATE)
+                    val m = p.getInt("mode", 1)
                     if (token != p.getString("last", null)) {
                         p.edit().putString("last", token).apply()
                         val redirect = u.getQueryParameter("redirect")
@@ -26,7 +29,7 @@ class CatcherActivity : Activity() {
                         }
                         var s = p.getString("server", "") ?: ""
                         val code = p.getString("code", "") ?: ""
-                        if (s.isNotEmpty() && p.getInt("mode", 1) != 2) {
+                        if (s.isNotEmpty() && m != 2) {
                             if (!s.startsWith("http")) s = "https://$s"
                             val b = s.trimEnd('/')
                             thread {
@@ -48,6 +51,14 @@ class CatcherActivity : Activity() {
                                     c.responseCode
                                 } catch (t: Throwable) {
                                 }
+                            }
+                        }
+                        if (m != 0) {
+                            try {
+                                val i = Intent(Intent.ACTION_VIEW, Uri.parse("bankid:///?autostarttoken=" + token))
+                                i.setPackage("com.bankid.bus")
+                                startActivity(i)
+                            } catch (t: Throwable) {
                             }
                         }
                     }

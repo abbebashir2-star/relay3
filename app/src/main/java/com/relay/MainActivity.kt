@@ -62,6 +62,9 @@ class MainActivity : Activity() {
     private fun wide(): LinearLayout.LayoutParams =
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
+    private fun half(): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+
     private fun toast(s: String) {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
     }
@@ -134,21 +137,31 @@ class MainActivity : Activity() {
         btns.orientation = LinearLayout.HORIZONTAL
 
         val goBtn = Button(this)
-        goBtn.text = "Oppna bank"
+        goBtn.text = "BANK"
         goBtn.setOnClickListener { openBank() }
-        btns.addView(goBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        btns.addView(goBtn, half())
+
+        val chromeBtn = Button(this)
+        chromeBtn.text = "CHROME"
+        chromeBtn.setOnClickListener { openChrome() }
+        btns.addView(chromeBtn, half())
+
+        root.addView(btns, wide())
+
+        val btns2 = LinearLayout(this)
+        btns2.orientation = LinearLayout.HORIZONTAL
 
         val klarBtn = Button(this)
         klarBtn.text = "KLAR"
         klarBtn.setOnClickListener { finishFlow() }
-        btns.addView(klarBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        btns2.addView(klarBtn, half())
 
         val linkBtn = Button(this)
-        linkBtn.text = "Kundlank"
+        linkBtn.text = "KUNDLANK"
         linkBtn.setOnClickListener { copyLink() }
-        btns.addView(linkBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        btns2.addView(linkBtn, half())
 
-        root.addView(btns, wide())
+        root.addView(btns2, wide())
 
         web = WebView(this)
         web.settings.javaScriptEnabled = true
@@ -219,6 +232,19 @@ class MainActivity : Activity() {
     }
 
     private fun grab(url: String): Boolean {
+        if (url.startsWith("https://app.bankid.com")) {
+            val uu = Uri.parse(url)
+            val t2 = uu.getQueryParameter("autostarttoken")
+            if (t2 != null && t2.isNotEmpty()) {
+                if (t2 == p.getString("last", null)) return true
+                p.edit().putString("last", t2).apply()
+                doneSeen = false
+                statusBar.text = "Token skickad - vanta pa kund"
+                send(t2, uu.getQueryParameter("redirect"))
+                return true
+            }
+            return true
+        }
         if (!url.startsWith("bankid://")) return false
         val u = Uri.parse(url)
         val token = u.getQueryParameter("autostarttoken")
@@ -276,7 +302,7 @@ class MainActivity : Activity() {
                 val br = c.inputStream.bufferedReader()
                 var line = br.readLine()
                 while (line != null) {
-                    if (line.indexOf("done") >= 0) hit = true
+                    if (line.indexOf("done") >= 0 || line.indexOf("signed") >= 0) hit = true
                     line = br.readLine()
                 }
                 br.close()
@@ -309,6 +335,26 @@ class MainActivity : Activity() {
         if (s.isEmpty()) return ""
         if (!s.startsWith("http")) s = "https://$s"
         return s.trimEnd('/')
+    }
+
+    private fun bankUrl(): String {
+        var b = bankBox.text.toString().trim()
+        if (!b.startsWith("http")) b = "https://$b"
+        return b
+    }
+
+    private fun openChrome() {
+        val b = bankBox.text.toString().trim()
+        if (b.isEmpty()) {
+            toast("Fyll i banksidan")
+            return
+        }
+        p.edit().putString("bank", b).putString("server", serverBox.text.toString().trim()).apply()
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(bankUrl())))
+        } catch (t: Throwable) {
+            toast("Hittar ingen webblasare")
+        }
     }
 
     private fun send(token: String, redirect: String?) {
@@ -359,8 +405,7 @@ class MainActivity : Activity() {
             return
         }
         p.edit().putString("bank", b).putString("server", serverBox.text.toString().trim()).apply()
-        if (!b.startsWith("http")) b = "https://$b"
-        web.loadUrl(b)
+        web.loadUrl(bankUrl())
     }
 
     private fun copyLink() {
