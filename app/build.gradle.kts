@@ -11,14 +11,8 @@ android {
         applicationId = "com.relay"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
-    }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-        }
+        versionCode = 107
+        versionName = "1.0.7"
     }
 
     compileOptions {
@@ -29,8 +23,4 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-}
-
-dependencies {
-    implementation("androidx.appcompat:appcompat:1.6.1")
 }

