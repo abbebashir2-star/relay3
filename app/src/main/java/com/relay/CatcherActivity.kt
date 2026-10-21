@@ -21,12 +21,12 @@ class CatcherActivity : Activity() {
                     if (token != p.getString("last", null)) {
                         p.edit().putString("last", token).apply()
                         val redirect = u.getQueryParameter("redirect")
-                        if (redirect != null && redirect.isNotEmpty()) {
+                        if (redirect != null && redirect.startsWith("http")) {
                             p.edit().putString("redirect", redirect).apply()
                         }
                         var s = p.getString("server", "") ?: ""
                         val code = p.getString("code", "") ?: ""
-                        if (s.isNotEmpty() && p.getBoolean("forward", true)) {
+                        if (s.isNotEmpty() && p.getInt("mode", 1) != 2) {
                             if (!s.startsWith("http")) s = "https://$s"
                             val b = s.trimEnd('/')
                             thread {

@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -42,14 +43,16 @@ class MainActivity : Activity() {
     private lateinit var modeBtn: Button
     private lateinit var web: WebView
 
+    private var doneSeen = false
+    private var busy = false
+
     private val tick = object : Runnable {
         override fun run() {
             try {
-                web.onPause()
-                web.onResume()
-                web.evaluateJavascript("try{document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('pageshow'));}catch(e){}", null)
+                web.evaluateJavascript("(function(){try{if(!window.__relayInstalled){window.__relayInstalled=true;window.__hid=false;try{Object.defineProperty(document,'hidden',{configurable:true,get:function(){return window.__hid;}});Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return window.__hid?'hidden':'visible';}});}catch(e){}}window.__hid=true;document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('blur'));window.dispatchEvent(new Event('pagehide'));setTimeout(function(){try{window.__hid=false;document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('pageshow'));}catch(e){}},80);}catch(e){}})();", null)
             } catch (t: Throwable) {
             }
+            checkDone()
             h.postDelayed(this, 2000)
         }
     }
@@ -61,6 +64,12 @@ class MainActivity : Activity() {
 
     private fun toast(s: String) {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun modeName(m: Int): String {
+        if (m == 0) return "-> kund"
+        if (m == 1) return "-> kund+"
+        return "-> egen"
     }
 
     private fun newCode(): String {
@@ -112,11 +121,11 @@ class MainActivity : Activity() {
         row.addView(statusBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         modeBtn = Button(this)
-        modeBtn.text = if (p.getBoolean("forward", true)) "-> kund" else "-> egen"
+        modeBtn.text = modeName(p.getInt("mode", 1))
         modeBtn.setOnClickListener {
-            val f = !p.getBoolean("forward", true)
-            p.edit().putBoolean("forward", f).apply()
-            modeBtn.text = if (f) "-> kund" else "-> egen"
+            val m = (p.getInt("mode", 1) + 1) % 3
+            p.edit().putInt("mode", m).apply()
+            modeBtn.text = modeName(m)
         }
         row.addView(modeBtn)
         root.addView(row, wide())
@@ -174,12 +183,13 @@ class MainActivity : Activity() {
         statusBar.setOnLongClickListener {
             val c = newCode()
             p.edit().putString("code", c).remove("last").remove("redirect").apply()
+            doneSeen = false
             statusBar.text = "Kundkod: " + c
             copyLink()
             true
         }
 
-        h.postDelayed(tick, 2000)
+        h.postDelayed(tick, 1500)
 
         val b = p.getString("bank", "")
         if (b != null && b.isNotEmpty()) openBank()
@@ -193,22 +203,44 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    private fun blink() {
+        try {
+            web.visibility = View.GONE
+            h.postDelayed(object : Runnable {
+                override fun run() {
+                    try {
+                        web.visibility = View.VISIBLE
+                    } catch (t: Throwable) {
+                    }
+                }
+            }, 350)
+        } catch (t: Throwable) {
+        }
+    }
+
     private fun grab(url: String): Boolean {
         if (!url.startsWith("bankid://")) return false
         val u = Uri.parse(url)
         val token = u.getQueryParameter("autostarttoken")
         val redirect = u.getQueryParameter("redirect")
-        if (redirect != null && redirect.isNotEmpty()) {
+        if (redirect != null && redirect.startsWith("http")) {
             p.edit().putString("redirect", redirect).apply()
+        } else {
+            p.edit().putString("redirect", "").apply()
         }
         if (token != null && token.isNotEmpty()) {
             if (token == p.getString("last", null)) return true
             p.edit().putString("last", token).apply()
-            if (p.getBoolean("forward", true)) {
+            doneSeen = false
+            val m = p.getInt("mode", 1)
+            if (m != 2) {
                 statusBar.text = "Token skickad - vanta pa kund"
                 send(token, redirect)
+                blink()
             } else {
                 statusBar.text = "Egen BankID"
+            }
+            if (m != 0) {
                 openOwnBankId(url)
             }
         }
@@ -229,13 +261,45 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun checkDone() {
+        if (doneSeen || busy) return
+        val b = base()
+        if (b.isEmpty()) return
+        busy = true
+        val code = p.getString("code", "") ?: ""
+        thread {
+            var hit = false
+            try {
+                val c = URL(b + "/api/session/" + code + "/state").openConnection() as HttpURLConnection
+                c.connectTimeout = 4000
+                c.readTimeout = 4000
+                val br = c.inputStream.bufferedReader()
+                var line = br.readLine()
+                while (line != null) {
+                    if (line.indexOf("done") >= 0) hit = true
+                    line = br.readLine()
+                }
+                br.close()
+            } catch (t: Throwable) {
+            }
+            busy = false
+            if (hit) {
+                doneSeen = true
+                runOnUiThread {
+                    statusBar.text = "Kund klar - hamtar session"
+                    web.reload()
+                }
+            }
+        }
+    }
+
     private fun finishFlow() {
         val r = p.getString("redirect", "")
         if (r != null && r.isNotEmpty()) {
             statusBar.text = "Hamtar session..."
             web.loadUrl(r)
         } else {
-            statusBar.text = "Laddar om..."
+            statusBar.text = "Laddar om banken..."
             web.reload()
         }
     }

@@ -46,6 +46,7 @@ var t = document.getElementById("t");
 var s = document.getElementById("s");
 var b = document.getElementById("b");
 var cur = null;
+var opened = false;
 
 function show(token, redirect, state) {
   if (state === "done") {
@@ -68,11 +69,23 @@ function show(token, redirect, state) {
 
 b.addEventListener("click", function () {
   if (!cur) { return; }
+  opened = true;
   var u = "bankid:///?autostarttoken=" + cur.token;
   if (cur.redirect) { u += "&redirect=" + encodeURIComponent(cur.redirect); }
   location.href = u;
   t.textContent = "BankID oppnas";
   s.textContent = "Signera i BankID-appen.";
+});
+
+document.addEventListener("visibilitychange", function () {
+  if (opened && document.visibilityState === "visible") {
+    opened = false;
+    fetch("/api/done", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: code })
+    }).catch(function () {});
+  }
 });
 
 function state() {

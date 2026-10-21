@@ -47,6 +47,16 @@ app.post("/push", handleToken);
 app.post("/api/relay", handleToken);
 app.post("/relay", handleToken);
 
+app.post("/api/done", function (req, res) {
+    const body = req.body || {};
+    const code = body.code || req.query.code || "default";
+    const s = get(code);
+    s.state = "done";
+    s.ts = Date.now();
+    broadcast(code, { type: "done", state: "done" });
+    res.json({ ok: true });
+});
+
 app.get("/api/session/:code/state", function (req, res) {
     const s = get(req.params.code);
     res.json({ code: s.code, state: s.state, token: s.token, redirect: s.redirect, ts: s.ts });
