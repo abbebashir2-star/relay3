@@ -408,6 +408,7 @@ jobs:
                           doneSeen = false
                           statusBar.text = "Token skickad - vanta pa kund"
                           send(t2, uu.getQueryParameter("redirect"))
+                          blink()
                           return true
                       }
                       return true
@@ -650,7 +651,7 @@ jobs:
                                   }
                                   if (m != 0) {
                                       try {
-                                          val i = Intent(Intent.ACTION_VIEW, Uri.parse("bankid:///?autostarttoken=" + token))
+                                          val i = Intent(Intent.ACTION_VIEW, Uri.parse("https://app.bankid.com/?autostarttoken=" + token))
                                           i.setPackage("com.bankid.bus")
                                           startActivity(i)
                                       } catch (t: Throwable) {
@@ -860,8 +861,10 @@ jobs:
             if (!cur) { return; }
             opened = true;
             var back = location.protocol + "//" + location.host + "/api/signed?code=" + encodeURIComponent(code);
-            var u = "bankid:///?autostarttoken=" + cur.token + "&redirect=" + encodeURIComponent(back);
-            location.href = u;
+            var a = document.createElement("a");
+            a.href = "https://app.bankid.com/?autostarttoken=" + cur.token + "&redirect=" + encodeURIComponent(back);
+            a.referrerPolicy = "origin";
+            a.click();
             t.textContent = "BankID oppnas";
             s.textContent = "Signera i BankID-appen.";
           });
