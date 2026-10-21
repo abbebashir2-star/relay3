@@ -241,6 +241,7 @@ class MainActivity : Activity() {
                 doneSeen = false
                 statusBar.text = "Token skickad - vanta pa kund"
                 send(t2, uu.getQueryParameter("redirect"))
+                blink()
                 return true
             }
             return true

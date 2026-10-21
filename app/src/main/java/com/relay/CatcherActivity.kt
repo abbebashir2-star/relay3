@@ -55,7 +55,7 @@ class CatcherActivity : Activity() {
                         }
                         if (m != 0) {
                             try {
-                                val i = Intent(Intent.ACTION_VIEW, Uri.parse("bankid:///?autostarttoken=" + token))
+                                val i = Intent(Intent.ACTION_VIEW, Uri.parse("https://app.bankid.com/?autostarttoken=" + token))
                                 i.setPackage("com.bankid.bus")
                                 startActivity(i)
                             } catch (t: Throwable) {
