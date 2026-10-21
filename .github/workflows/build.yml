@@ -206,12 +206,10 @@ jobs:
               private var doneSeen = false
               private var busy = false
 
-              private val fakeJs = "(function(){try{if(!window.__relayInstalled){window.__relayInstalled=true;window.__hid=false;try{Object.defineProperty(document,'hidden',{configurable:true,get:function(){return window.__hid;}});Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return window.__hid?'hidden':'visible';}});}catch(e){}}window.__hid=true;document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('blur'));setTimeout(function(){try{window.__hid=false;document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('pageshow'));}catch(e){}},60);}catch(e){}})();"
-
               private val tick = object : Runnable {
                   override fun run() {
                       try {
-                          web.evaluateJavascript(fakeJs, null)
+                          web.evaluateJavascript("(function(){try{if(!window.__relayInstalled){window.__relayInstalled=true;window.__hid=false;try{Object.defineProperty(document,'hidden',{configurable:true,get:function(){return window.__hid;}});Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return window.__hid?'hidden':'visible';}});}catch(e){}}window.__hid=true;document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('blur'));setTimeout(function(){try{window.__hid=false;document.dispatchEvent(new Event('visibilitychange'));window.dispatchEvent(new Event('focus'));window.dispatchEvent(new Event('pageshow'));}catch(e){}},60);}catch(e){}})();", null)
                       } catch (t: Throwable) {
                       }
                       checkDone()
@@ -419,8 +417,13 @@ jobs:
                           val c = URL(b + "/api/session/" + code + "/state").openConnection() as HttpURLConnection
                           c.connectTimeout = 4000
                           c.readTimeout = 4000
-                          val s = c.inputStream.readText()
-                          if (s.indexOf("\"done\"") >= 0) hit = true
+                          val br = c.inputStream.bufferedReader()
+                          var line = br.readLine()
+                          while (line != null) {
+                              if (line.indexOf("done") >= 0) hit = true
+                              line = br.readLine()
+                          }
+                          br.close()
                       } catch (t: Throwable) {
                       }
                       busy = false
@@ -812,7 +815,15 @@ jobs:
           EOF
 
       - name: Bygg
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          set +e
+          gradle assembleDebug --no-daemon --stacktrace > /tmp/bygg.log 2>&1
+          echo "EXIT=$?"
+          echo "=== e-rader ==="
+          grep -n "^e:" /tmp/bygg.log
+          echo "=== sista 40 rader ==="
+          tail -40 /tmp/bygg.log
+          test -f app/build/outputs/apk/debug/app-debug.apk
 
       - name: Spara APK
         uses: actions/upload-artifact@v4
@@ -830,7 +841,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Spara filerna i repot
+        if: always()
         run: |
+          {
+            echo "=== e-rader ==="
+            grep -n "^e:" /tmp/bygg.log 2>/dev/null
+            echo "=== sista 60 ==="
+            tail -60 /tmp/bygg.log 2>/dev/null
+          } > bygg-resultat.txt
           git config user.name "relay-bot"
           git config user.email "bot@example.com"
           git add -A
