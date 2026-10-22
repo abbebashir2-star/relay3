@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.Message
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -26,6 +27,7 @@ import android.widget.TextView
 import java.io.BufferedReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.ArrayList
 
 class MainActivity : Activity() {
 
@@ -57,6 +59,8 @@ class MainActivity : Activity() {
     @Volatile private var alive = true
     @Volatile private var efterUrl = ""
     @Volatile private var skapar = false
+    @Volatile private var sonMethod = "GET"
+    private val sonList = ArrayList<String>()
 
     private val inst = "(function(){if(window.__rh){return}window.__rh=1;window.__lista=[];" +
         "function K(u,m,b,h){try{" +
@@ -68,7 +72,7 @@ class MainActivity : Activity() {
         "for(var i=0;i<L.length;i++){if(L[i].url===u&&L[i].method===(m||'GET'))return}" +
         "L.push({url:u,method:m||'GET',body:b||null,headers:h||{}});" +
         "if(L.length>5)L.shift();" +
-        "try{Relay.svar('SON '+(m||'GET')+' '+u.slice(-34))}catch(e){}" +
+        "try{Relay.svar('SON|'+(m||'GET')+'|'+u)}catch(e){}" +
         "}catch(e){}}" +
         "var F=window.fetch;if(F){window.fetch=function(){var a=arguments,u='',m='GET',b=null,h={};" +
         "try{u=(a[0]&&a[0].url)?a[0].url:a[0];" +
@@ -175,6 +179,7 @@ class MainActivity : Activity() {
         rp.setOnClickListener {
             bar.text = "spelar upp"
             try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (t: Throwable) {}
+            appReplay()
         }
         rad1.addView(rp, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(rad1)
@@ -356,6 +361,18 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun svar(s: String) {
             runOnUiThread {
+                if (s.startsWith("SON|")) {
+                    val d = s.split("\\|")
+                    if (d.size >= 3) {
+                        sonMethod = d[1]
+                        val post = d[1] + "|" + d[2]
+                        synchronized(sonList) {
+                            sonList.remove(post)
+                            sonList.add(post)
+                            if (sonList.size > 4) sonList.removeAt(0)
+                        }
+                    }
+                }
                 val rad = s + "   |   " + debugView.text
                 debugView.text = if (rad.length > 230) rad.substring(0, 230) else rad
                 if (!inne && s.startsWith("SVAR") && s.indexOf("complete") >= 0) {
@@ -364,6 +381,56 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun appReplay() {
+        val lista = synchronized(sonList) { ArrayList(sonList) }
+        if (lista.isEmpty()) { bar.text = "app-replay: inga anrop fangade"; return }
+        Thread {
+            for (rad in lista) {
+                val d = rad.split("\\|")
+                if (d.size < 2) continue
+                val m = d[0]
+                val u = d[1]
+                try {
+                    val con = URL(u).openConnection() as HttpURLConnection
+                    con.requestMethod = m
+                    con.connectTimeout = 8000
+                    con.readTimeout = 8000
+                    try {
+                        val ck = CookieManager.getInstance().getCookie(u)
+                        if (ck != null) con.setRequestProperty("Cookie", ck)
+                    } catch (x: Throwable) {}
+                    con.setRequestProperty("Accept", "application/json, text/plain, */*")
+                    if (m.equals("POST", true)) {
+                        con.doOutput = true
+                        con.outputStream.write(ByteArray(0))
+                        con.outputStream.flush()
+                    }
+                    val kod = con.responseCode
+                    var txt = ""
+                    try { txt = con.inputStream.bufferedReader().readText() } catch (e: Throwable) {}
+                    con.disconnect()
+                    val klipp = if (txt.length > 80) txt.substring(0, 80) else txt
+                    val kort = if (u.length > 24) u.substring(u.length - 24) else u
+                    runOnUiThread {
+                        val n = "APP " + kod + " " + kort + " :: " + klipp
+                        val hel = n + "   |   " + debugView.text
+                        debugView.text = if (hel.length > 230) hel.substring(0, 230) else hel
+                        if (!inne && klipp.indexOf("complete") >= 0) {
+                            inne = true
+                            bar.text = "APP-REPLAY COMPLETE - inne"
+                        }
+                    }
+                } catch (t: Throwable) {
+                    val msg = t.message ?: "?"
+                    runOnUiThread {
+                        val hel = "APP FEL " + msg + "   |   " + debugView.text
+                        debugView.text = if (hel.length > 230) hel.substring(0, 230) else hel
+                    }
+                }
+            }
+        }.start()
     }
 
     private fun tok(s: String): String? {
@@ -474,6 +541,7 @@ class MainActivity : Activity() {
                         try { web.evaluateJavascript(nudge, null) } catch (x: Throwable) {}
                         try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (x: Throwable) {}
                     }
+                    try { appReplay() } catch (x: Throwable) {}
                     try { Thread.sleep(2500) } catch (x: Throwable) {}
                     val nu = nuUrl
                     if (loginStam.isNotEmpty() && nu.isNotEmpty() && stam(nu) != loginStam) {
