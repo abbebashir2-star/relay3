@@ -1,11 +1,7 @@
 {
-  "name": "relay",
-  "version": "1.0.0",
+  "name": "relay-server",
+  "version": "4.0.0",
   "private": true,
-  "dependencies": {
-    "express": "^4.19.2"
-  },
-  "scripts": {
-    "start": "node server.js"
-  }
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "ws": "^8.18.0" }
 }

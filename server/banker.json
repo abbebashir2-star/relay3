@@ -1,0 +1,74 @@
+{
+  "swedbank": {
+    "namn": "Swedbank",
+    "farg": "#0057B8",
+    "start": "https://online.swedbank.se/",
+    "efter": "https://online.swedbank.se/app/ib/",
+    "klick": [],
+    "inloggad": ["Saldo", "Konto", "Logga ut", "Tillgangligt"]
+  },
+  "handelsbanken": {
+    "namn": "Handelsbanken",
+    "farg": "#003E74",
+    "start": "https://www.handelsbanken.se/sv/logga-in",
+    "efter": "",
+    "klick": [],
+    "inloggad": ["Saldo", "Konto", "Logga ut"]
+  },
+  "seb": {
+    "namn": "SEB",
+    "farg": "#00A94F",
+    "start": "https://login.seb.se/",
+    "efter": "",
+    "klick": [],
+    "inloggad": ["Saldo", "Konto", "Logga ut"]
+  },
+  "nordea": {
+    "namn": "Nordea",
+    "farg": "#0000A0",
+    "start": "https://www.nordea.se/",
+    "efter": "",
+    "klick": [],
+    "inloggad": ["Saldo", "Konto", "Logga ut"]
+  },
+  "icabanken": {
+    "namn": "ICA Banken",
+    "farg": "#E13205",
+    "start": "https://www.icabanken.se/logga-in/",
+    "efter": "",
+    "klick": [],
+    "inloggad": ["Saldo", "Konto", "Logga ut"]
+  },
+  "lansforsakringar": {
+    "namn": "Lansforsakringar",
+    "farg": "#005AA0",
+    "start": "https://www.lansforsakringar.se/logga-in/",
+    "efter": "",
+    "klick": [],
+    "inloggad": ["Saldo", "Konto", "Logga ut"]
+  },
+  "danskebank": {
+    "namn": "Danske Bank",
+    "farg": "#003755",
+    "start": "https://www.danskebank.se/",
+    "efter": "",
+    "klick": [],
+    "inloggad": ["Saldo", "Konto", "Logga ut"]
+  },
+  "skandiabanken": {
+    "namn": "Skandiabanken",
+    "farg": "#FF6600",
+    "start": "https://www.skandiabanken.se/",
+    "efter": "",
+    "klick": [],
+    "inloggad": ["Saldo", "Konto", "Logga ut"]
+  },
+  "fri": {
+    "namn": "Egen",
+    "farg": "#0b5cab",
+    "start": "",
+    "efter": "",
+    "klick": [],
+    "inloggad": ["Saldo", "Konto", "Logga ut"]
+  }
+}

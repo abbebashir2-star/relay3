@@ -3,3 +3,8 @@ build/
 app/build/
 local.properties
 bygg.log
+server/sessioner.json
+server/logg.jsonl
+server/lar.json
+server/node_modules/
+hs/
