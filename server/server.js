@@ -25,6 +25,12 @@ function giltigToken(t) {
   return typeof t === 'string' && /^[0-9a-fA-F-]{8,}$/.test(t);
 }
 
+const KLAR = '<!doctype html><meta charset="utf-8">' +
+  '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+  '<style>body{margin:0;font-family:-apple-system,Roboto,sans-serif;background:#f3f3f3;text-align:center;padding:60px 24px;color:#1a1a1a}' +
+  'h2{color:#ff6a00;font-size:22px}p{color:#555;font-size:15px}</style>' +
+  '<h2>Klart</h2><p>Signeringen ar klar.<br>Du kan stanga sidan.</p>';
+
 app.post('/api/session', (req, res) => {
   const c = ny();
   S[c] = { token: '', at: 0, signed: false, redirect: '', skapad: Date.now() };
@@ -56,10 +62,12 @@ app.post('/api/session/:code/token', (req, res) => {
 app.get('/api/signed', (req, res) => {
   const s = S[req.query.code];
   if (s) s.signed = true;
-  if (s && /^https?:/i.test(s.redirect || '')) { res.redirect(302, s.redirect); return; }
-  res.send('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
-    '<body style="font-family:sans-serif;text-align:center;padding:48px">' +
-    '<h2>Klart</h2><p>Du kan stanga sidan.</p></body>');
+  const r = s && s.redirect ? s.redirect : '';
+  if (/^https?:\/\//i.test(r) && r.indexOf('trycloudflare') < 0) {
+    res.redirect(302, r);
+    return;
+  }
+  res.send(KLAR);
 });
 
 app.get('/k/:code', (req, res) => {

