@@ -82,8 +82,8 @@ jobs:
                   applicationId = "com.relay"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 118
-                  versionName = "1.1.8"
+                  versionCode = 119
+                  versionName = "1.1.9"
               }
 
               compileOptions {
@@ -136,8 +136,31 @@ jobs:
                           <data android:scheme="bankid" />
                       </intent-filter>
                   </activity>
+
+                  <activity
+                      android:name=".VackActivity"
+                      android:exported="false"
+                      android:noHistory="true"
+                      android:excludeFromRecents="true"
+                      android:theme="@android:style/Theme.Translucent.NoTitleBar" />
               </application>
           </manifest>
+          EOF
+
+          w app/src/main/java/com/relay/VackActivity.kt <<'EOF'
+          package com.relay
+
+          import android.app.Activity
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+
+          class VackActivity : Activity() {
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  Handler(Looper.getMainLooper()).postDelayed({ finish() }, 500)
+              }
+          }
           EOF
 
           w app/src/main/java/com/relay/MainActivity.kt <<'EOF'
@@ -321,6 +344,7 @@ jobs:
                   rp.text = "RP"
                   rp.setOnClickListener {
                       bar.text = "spelar upp"
+                      try { startActivity(Intent(this@MainActivity, VackActivity::class.java)) } catch (x: Throwable) {}
                       try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (t: Throwable) {}
                       appReplay()
                   }
@@ -681,6 +705,7 @@ jobs:
                               val n = i
                               runOnUiThread {
                                   bar.text = "vacker + replay (" + n + "/8)"
+                                  try { startActivity(Intent(this@MainActivity, VackActivity::class.java)) } catch (x: Throwable) {}
                                   try { web.evaluateJavascript(nudge, null) } catch (x: Throwable) {}
                                   try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (x: Throwable) {}
                               }
