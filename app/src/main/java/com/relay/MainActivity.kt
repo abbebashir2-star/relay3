@@ -178,6 +178,7 @@ class MainActivity : Activity() {
         rp.text = "RP"
         rp.setOnClickListener {
             bar.text = "spelar upp"
+            try { startActivity(Intent(this@MainActivity, VackActivity::class.java)) } catch (x: Throwable) {}
             try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (t: Throwable) {}
             appReplay()
         }
@@ -538,6 +539,7 @@ class MainActivity : Activity() {
                     val n = i
                     runOnUiThread {
                         bar.text = "vacker + replay (" + n + "/8)"
+                        try { startActivity(Intent(this@MainActivity, VackActivity::class.java)) } catch (x: Throwable) {}
                         try { web.evaluateJavascript(nudge, null) } catch (x: Throwable) {}
                         try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (x: Throwable) {}
                     }
