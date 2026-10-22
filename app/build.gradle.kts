@@ -11,8 +11,8 @@ android {
         applicationId = "com.relay"
         minSdk = 26
         targetSdk = 34
-        versionCode = 113
-        versionName = "1.1.3"
+        versionCode = 115
+        versionName = "1.1.5"
     }
 
     compileOptions {

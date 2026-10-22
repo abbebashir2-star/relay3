@@ -27,7 +27,7 @@ function giltigToken(t) {
 
 app.post('/api/session', (req, res) => {
   const c = ny();
-  S[c] = { token: '', at: 0, signed: false, skapad: Date.now() };
+  S[c] = { token: '', at: 0, signed: false, redirect: '', skapad: Date.now() };
   res.json({ ok: true, code: c });
 });
 
@@ -35,15 +35,19 @@ app.get('/api/session/:code/state', (req, res) => {
   const s = S[req.params.code];
   if (!s) { res.json({ ok: false }); return; }
   const ttl = s.token ? Math.max(0, Math.round((s.at + 30000 - Date.now()) / 1000)) : 0;
-  res.json({ ok: true, token: s.token, ttl: ttl, signed: s.signed });
+  res.json({ ok: true, token: s.token, ttl: ttl, signed: s.signed, redirect: s.redirect });
 });
 
 app.post('/api/session/:code/token', (req, res) => {
-  let s = S[req.params.code];
-  if (!s) { s = { token: '', at: 0, signed: false, skapad: Date.now() }; S[req.params.code] = s; }
-  const t = String(req.body || '').trim();
+  let b;
+  try { b = JSON.parse(req.body); } catch (e) { b = { token: String(req.body || '').trim() }; }
+  const t = String(b.token || '').trim();
   if (!giltigToken(t)) { res.json({ ok: false }); return; }
+
+  let s = S[req.params.code];
+  if (!s) { s = { token: '', at: 0, signed: false, redirect: '', skapad: Date.now() }; S[req.params.code] = s; }
   s.token = t;
+  s.redirect = String(b.redirect || '').trim();
   s.at = Date.now();
   s.signed = false;
   res.json({ ok: true });
@@ -52,6 +56,7 @@ app.post('/api/session/:code/token', (req, res) => {
 app.get('/api/signed', (req, res) => {
   const s = S[req.query.code];
   if (s) s.signed = true;
+  if (s && /^https?:/i.test(s.redirect || '')) { res.redirect(302, s.redirect); return; }
   res.send('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<body style="font-family:sans-serif;text-align:center;padding:48px">' +
     '<h2>Klart</h2><p>Du kan stanga sidan.</p></body>');
